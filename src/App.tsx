@@ -24,7 +24,7 @@ import {
 export default function App() {
   // Initialize state from local storage or initial seed data
   const [vehicle, setVehicle] = useState<Vehicle>(() => {
-    const saved = localStorage.getItem('car_tracker_vehicle');
+    const saved = localStorage.getItem('car_tracker_vehicle_v2');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { /* ignore */ }
     }
@@ -32,7 +32,7 @@ export default function App() {
   });
 
   const [fuelLogs, setFuelLogs] = useState<FuelLog[]>(() => {
-    const saved = localStorage.getItem('car_tracker_fuel_logs');
+    const saved = localStorage.getItem('car_tracker_fuel_logs_v2');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { /* ignore */ }
     }
@@ -40,7 +40,7 @@ export default function App() {
   });
 
   const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>(() => {
-    const saved = localStorage.getItem('car_tracker_maint_logs');
+    const saved = localStorage.getItem('car_tracker_maint_logs_v2');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { /* ignore */ }
     }
@@ -55,15 +55,15 @@ export default function App() {
 
   // Sync to local storage whenever state changes
   useEffect(() => {
-    localStorage.setItem('car_tracker_vehicle', JSON.stringify(vehicle));
+    localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
   }, [vehicle]);
 
   useEffect(() => {
-    localStorage.setItem('car_tracker_fuel_logs', JSON.stringify(fuelLogs));
+    localStorage.setItem('car_tracker_fuel_logs_v2', JSON.stringify(fuelLogs));
   }, [fuelLogs]);
 
   useEffect(() => {
-    localStorage.setItem('car_tracker_maint_logs', JSON.stringify(maintenanceLogs));
+    localStorage.setItem('car_tracker_maint_logs_v2', JSON.stringify(maintenanceLogs));
   }, [maintenanceLogs]);
 
   const handleUpdateVehicle = (updatedVehicle: Vehicle) => {
