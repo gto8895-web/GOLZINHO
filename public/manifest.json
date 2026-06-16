@@ -12,13 +12,13 @@
       "src": "./icon.jpg",
       "type": "image/jpeg",
       "sizes": "512x512",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "./icon.jpg",
       "type": "image/jpeg",
       "sizes": "192x192",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ]
 }
