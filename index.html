@@ -11,9 +11,7 @@
     <meta name="theme-color" content="#020617" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/icon.jpg" />
-    <link rel="apple-touch-icon" href="/icon.png" />
     <link rel="icon" type="image/jpeg" href="/icon.jpg" />
-    <link rel="icon" type="image/png" href="/icon.png" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,15 +20,6 @@
   <body class="bg-slate-950 text-slate-100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('Service Worker registrado!', reg))
-            .catch(err => console.log('Erro ao registrar Service Worker:', err));
-        });
-      }
-    </script>
   </body>
 </html>
 
