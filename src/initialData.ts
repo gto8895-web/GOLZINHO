@@ -1,0 +1,108 @@
+import { Vehicle, FuelLog, MaintenanceLog } from './types';
+
+export const INITIAL_VEHICLE: Vehicle = {
+  id: 'vehicle-1',
+  name: 'Civic LXR',
+  brand: 'Honda',
+  plate: 'BRA-2E26',
+  year: '2016',
+  currentOdometer: 112450,
+};
+
+export const INITIAL_FUEL_LOGS: FuelLog[] = [
+  {
+    id: 'fuel-1',
+    vehicleId: 'vehicle-1',
+    date: '2026-04-10',
+    odometer: 110250,
+    pricePerLiter: 5.79,
+    liters: 42.5,
+    totalPrice: 246.08,
+    fuelType: 'Gasolina',
+    gasStation: 'Posto Ipiranga Centro',
+  },
+  {
+    id: 'fuel-2',
+    vehicleId: 'vehicle-1',
+    date: '2026-04-25',
+    odometer: 110720,
+    pricePerLiter: 5.85,
+    liters: 45.0,
+    totalPrice: 263.25,
+    fuelType: 'Gasolina',
+    gasStation: 'Posto Petrobras Universitário',
+  },
+  {
+    id: 'fuel-3',
+    vehicleId: 'vehicle-1',
+    date: '2026-05-12',
+    odometer: 111180,
+    pricePerLiter: 3.89,
+    liters: 44.2,
+    totalPrice: 171.94,
+    fuelType: 'Etanol',
+    gasStation: 'Posto Shell Marginal',
+  },
+  {
+    id: 'fuel-4',
+    vehicleId: 'vehicle-1',
+    date: '2026-05-28',
+    odometer: 111550,
+    pricePerLiter: 5.89,
+    liters: 41.0,
+    totalPrice: 241.49,
+    fuelType: 'Gasolina',
+    gasStation: 'Posto Ipiranga Centro',
+  },
+  {
+    id: 'fuel-5',
+    vehicleId: 'vehicle-1',
+    date: '2026-06-12',
+    odometer: 112010,
+    pricePerLiter: 5.92,
+    liters: 43.8,
+    totalPrice: 259.30,
+    fuelType: 'Gasolina',
+    gasStation: 'Posto BR Rodovia',
+  }
+];
+
+export const INITIAL_MAINTENANCE_LOGS: MaintenanceLog[] = [
+  {
+    id: 'maint-1',
+    vehicleId: 'vehicle-1',
+    date: '2026-04-15',
+    description: 'Troca de Óleo do Motor 0W20 e Filtro de Óleo',
+    type: 'Óleo',
+    odometer: 110350,
+    cost: 320.00,
+    workshop: 'Hondalub Oficina Especializada',
+    nextOdometerLimit: 120350,
+    nextDateLimit: '2026-10-15',
+    status: 'Realizada',
+  },
+  {
+    id: 'maint-2',
+    vehicleId: 'vehicle-1',
+    date: '2026-05-05',
+    description: 'Alinhamento e Balanceamento 3D + Pastilhas de Freio Dianteiras',
+    type: 'Freios',
+    odometer: 110900,
+    cost: 450.00,
+    workshop: 'Pneus e Rodas Auto Center',
+    nextOdometerLimit: 120900,
+    status: 'Realizada',
+  },
+  {
+    id: 'maint-3',
+    vehicleId: 'vehicle-1',
+    date: '2026-06-25',
+    description: 'Revisão periódica de filtros de ar e ar condicionado',
+    type: 'Filtro',
+    odometer: 112500,
+    cost: 180.00,
+    workshop: 'Oficina do Silvano',
+    nextOdometerLimit: 122500,
+    status: 'Agendada',
+  }
+];
