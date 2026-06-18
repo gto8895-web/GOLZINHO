@@ -106,9 +106,9 @@ export function getMonthlySpendData(fuelLogs: FuelLog[], maintenanceLogs: Mainte
   };
 
   fuelLogs.forEach(log => addSpend(log.date, log.totalPrice, 'fuel'));
-  // Only include completed maintenance logs in historical spending
+  // Only include completed maintenance logs (excluding Avarias) in historical spending
   maintenanceLogs
-    .filter(log => log.status === 'Realizada')
+    .filter(log => log.status === 'Realizada' && log.type !== 'Avaria')
     .forEach(log => addSpend(log.date, log.cost, 'maintenance'));
 
   // Convert map to sorted list
@@ -148,7 +148,7 @@ export function calculateOverallStats(
 ) {
   const totalFuelCost = fuelLogs.reduce((sum, item) => sum + item.totalPrice, 0);
   const totalMaintCost = maintenanceLogs
-    .filter(m => m.status === 'Realizada')
+    .filter(m => m.status === 'Realizada' && m.type !== 'Avaria')
     .reduce((sum, item) => sum + item.cost, 0);
     
   const totalSpends = totalFuelCost + totalMaintCost;

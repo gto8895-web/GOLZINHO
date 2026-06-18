@@ -189,6 +189,28 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
         </button>
       </div>
 
+      {activeTab === 'avarias' && (
+        <div className="p-4 bg-rose-955/10 border border-rose-900/30 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-slate-350">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-bold text-xs text-rose-200 uppercase tracking-wider">Centro de Estimativa de Avarias</p>
+              <p className="text-[10px] text-slate-400">Valores cadastrados como estimativa de problemas a resolver. Eles não entram nos custos de gastos regulares do veículo.</p>
+            </div>
+          </div>
+          <div className="bg-rose-950/30 border border-rose-900/30 px-3.5 py-2 rounded-lg flex flex-col sm:text-right">
+            <span className="text-[9px] uppercase tracking-widest text-rose-300 font-extrabold font-sans">Total Estimado</span>
+            <span className="font-mono font-bold text-rose-400 text-sm">
+              {formatCurrency(
+                maintenanceLogs
+                  .filter((m) => m.type === 'Avaria')
+                  .reduce((sum, item) => sum + item.cost, 0)
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Active filters indicators */}
       {filtered.length === 0 ? (
         <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2 border border-dashed border-slate-800 rounded-xl bg-slate-950/40">
