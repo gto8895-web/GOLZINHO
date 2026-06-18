@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { FuelLog, MaintenanceLog } from '../types';
-import { Trash2, Search, Fuel, Wrench, ArrowDownUp, AlertCircle, ShoppingBag, MapPin, Navigation } from 'lucide-react';
+import { Trash2, Search, Fuel, Wrench, ArrowDownUp, AlertCircle, ShoppingBag, MapPin, Navigation, AlertTriangle } from 'lucide-react';
 
 interface LogsTableProps {
   fuelLogs: FuelLog[];
@@ -9,11 +9,11 @@ interface LogsTableProps {
   onDeleteMaintLog: (id: string) => void;
 }
 
-type TabType = 'todos' | 'combustivel' | 'manutencao' | 'agendamento';
+type TabType = 'todos' | 'combustivel' | 'manutencao' | 'avarias' | 'agendamento';
 
 interface UnifiedLog {
   id: string;
-  type: 'fuel' | 'maint';
+  type: 'fuel' | 'maint' | 'avaria';
   date: string;
   odometer: number;
   cost: number;
@@ -56,6 +56,18 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
       place: m.workshop,
       status: m.status,
     })),
+    ...maintenanceLogs.filter((m) => m.type === 'Avaria').map((m) => ({
+      id: m.id,
+      type: 'avaria' as const,
+      date: m.date,
+      odometer: m.odometer,
+      cost: m.cost,
+      title: m.description,
+      subtitle: 'Avaria Pendente',
+      category: 'Avaria',
+      place: m.workshop,
+      status: 'Avaria',
+    })),
   ];
 
   // Filters
@@ -64,6 +76,7 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
     if (activeTab === 'combustivel' && log.type !== 'fuel') return false;
     if (activeTab === 'manutencao' && (log.type !== 'maint' || log.status === 'Agendada')) return false;
     if (activeTab === 'agendamento' && (log.type !== 'maint' || log.status !== 'Agendada')) return false;
+    if (activeTab === 'avarias' && log.type !== 'avaria') return false;
 
     // 2. Search filter
     if (search.trim()) {
@@ -142,11 +155,12 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
       {/* Tabs */}
       <div className="flex flex-wrap md:items-center justify-between gap-2 border-b border-slate-800 pb-2">
         <div className="flex flex-wrap gap-1">
-          {(['todos', 'combustivel', 'manutencao', 'agendamento'] as TabType[]).map((tab) => {
+          {(['todos', 'combustivel', 'manutencao', 'avarias', 'agendamento'] as TabType[]).map((tab) => {
             const labels: { [key in TabType]: string } = {
               todos: 'Todos',
               combustivel: 'Combustível',
               manutencao: 'Manutenção',
+              avarias: 'Avarias',
               agendamento: 'Agendados',
             };
             return (
@@ -199,16 +213,17 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
               {filtered.map((log) => {
                 const isFuel = log.type === 'fuel';
                 const isScheduled = log.status === 'Agendada';
+                const isAvaria = log.type === 'avaria';
 
                 return (
                   <tr
                     key={`${log.type}-${log.id}`}
                     className={`border-b border-slate-850/60 hover:bg-slate-850/30 transition text-slate-300 text-xs ${
-                      isScheduled ? 'bg-amber-955/10' : ''
+                      isScheduled ? 'bg-amber-955/10' : isAvaria ? 'bg-rose-955/10' : ''
                     }`}
                   >
                     {/* Date */}
-                    <td className="py-3 px-3 font-semibold text-slate-400 whitespace-nowrap">
+                    <td className="py-3 px-3 font-semibold text-slate-404 whitespace-nowrap">
                       {formatDatePT(log.date)}
                     </td>
 
@@ -219,12 +234,20 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
                           className={`p-1.5 rounded-lg flex-shrink-0 ${
                             isFuel
                               ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900/30'
+                              : isAvaria
+                              ? 'bg-rose-950/50 text-rose-400 border border-rose-900/30'
                               : isScheduled
                               ? 'bg-amber-950/50 text-amber-400 border border-amber-900/30'
                               : 'bg-indigo-950/50 text-indigo-400 border border-indigo-900/30'
                           }`}
                         >
-                          {isFuel ? <Fuel className="w-3.5 h-3.5" /> : <Wrench className="w-3.5 h-3.5" />}
+                          {isFuel ? (
+                            <Fuel className="w-3.5 h-3.5" />
+                          ) : isAvaria ? (
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          ) : (
+                            <Wrench className="w-3.5 h-3.5" />
+                          )}
                         </div>
 
                         <div>
@@ -260,6 +283,10 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
                         ) : (
                           <span className="text-[10px] text-slate-500 italic">Média pendente</span>
                         )
+                      ) : isAvaria ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-950/50 text-rose-400 border border-rose-900/30">
+                          {log.subtitle}
+                        </span>
                       ) : (
                         <span
                           className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
@@ -275,7 +302,7 @@ export function LogsTable({ fuelLogs, maintenanceLogs, onDeleteFuelLog, onDelete
 
                     {/* Cost amount */}
                     <td className={`py-3 px-3 text-right font-mono font-bold whitespace-nowrap text-xs ${
-                      isScheduled ? 'text-amber-400' : 'text-slate-100'
+                      isScheduled ? 'text-amber-400' : isAvaria ? 'text-rose-400' : 'text-slate-100'
                     }`}>
                       {formatCurrency(log.cost)}
                     </td>
