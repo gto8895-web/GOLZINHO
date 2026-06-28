@@ -3,11 +3,13 @@ import {
   getFirestore, 
   doc, 
   getDoc, 
+  getDocFromServer,
   setDoc, 
   collection, 
   query, 
   where, 
   getDocs,
+  getDocsFromServer,
   limit
 } from 'firebase/firestore';
 import { Vehicle, FuelLog, MaintenanceLog } from './types';
@@ -64,75 +66,116 @@ export async function saveUserData(
     plateNormalized: normalized || null
   };
 
-  // 1. Save to the active userId document
-  const userDocRef = doc(db, 'users', userId);
-  await setDoc(userDocRef, dataToSave, { merge: true });
+  try {
+    // 1. Save to the active userId document
+    const userDocRef = doc(db, 'users', userId);
+    await setDoc(userDocRef, dataToSave, { merge: true });
 
-  // 2. If a plate is present, also save to a deterministic plate-based document
-  // so that even if the user clears all local storage, they can restore instantly by plate!
-  if (normalized) {
-    const plateDocRef = doc(db, 'users', `placa_${normalized}`);
-    await setDoc(plateDocRef, {
-      ...dataToSave,
-      userId: `placa_${normalized}` // ensure the deterministic ID is preserved when retrieved
-    }, { merge: true });
+    // 2. If a plate is present, also save to a deterministic plate-based document
+    // so that even if the user clears all local storage, they can restore instantly by plate!
+    if (normalized) {
+      const plateDocRef = doc(db, 'users', `placa_${normalized}`);
+      await setDoc(plateDocRef, {
+        ...dataToSave,
+        userId: `placa_${normalized}` // ensure the deterministic ID is preserved when retrieved
+      }, { merge: true });
+    }
+  } catch (error) {
+    console.error("Erro ao salvar dados do usuário no Firestore:", error);
+    throw error;
   }
 }
 
-// Load user data by userId
+// Load user data by userId (Server-first, falling back to cache if offline)
 export async function loadUserData(userId: string): Promise<UserData | null> {
+  const userDocRef = doc(db, 'users', userId);
   try {
-    const userDocRef = doc(db, 'users', userId);
-    const docSnap = await getDoc(userDocRef);
+    // Force direct fetch from server to guarantee 100% cloud accuracy and bypass stale browser cache
+    const docSnap = await getDocFromServer(userDocRef);
     if (docSnap.exists()) {
       return docSnap.data() as UserData;
     }
   } catch (error) {
-    console.error("Erro ao carregar dados do usuário no Firestore:", error);
+    console.warn("Erro ao buscar dados do servidor, tentando cache local...", error);
+    try {
+      const docSnap = await getDoc(userDocRef);
+      if (docSnap.exists()) {
+        return docSnap.data() as UserData;
+      }
+    } catch (cacheError) {
+      console.error("Erro ao carregar dados do cache local do Firestore:", cacheError);
+    }
     throw error;
   }
   return null;
 }
 
-// Search for user data by vehicle plate
+// Search for user data by vehicle plate (Server-first)
 export async function findUserByPlate(plate: string): Promise<UserData | null> {
   const normalized = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!normalized) return null;
+  
+  const plateDocRef = doc(db, 'users', `placa_${normalized}`);
   try {
-    // Try deterministic document fetch first (super fast & direct)
-    const plateDocRef = doc(db, 'users', `placa_${normalized}`);
-    const docSnap = await getDoc(plateDocRef);
+    // Try deterministic document fetch from server first
+    const docSnap = await getDocFromServer(plateDocRef);
     if (docSnap.exists()) {
       return docSnap.data() as UserData;
     }
+  } catch (error) {
+    console.warn("Erro ao buscar placa diretamente do servidor, tentando query...", error);
+  }
 
-    // Fallback to query
+  // Fallback to query from server
+  try {
     const usersRef = collection(db, 'users');
     const q = query(usersRef, where('plateNormalized', '==', normalized), limit(1));
-    const querySnapshot = await getDocs(q);
+    const querySnapshot = await getDocsFromServer(q);
     if (!querySnapshot.empty) {
       return querySnapshot.docs[0].data() as UserData;
     }
   } catch (error) {
-    console.error("Erro ao buscar veículo pela placa no Firestore:", error);
-    throw error;
+    console.error("Erro ao realizar query da placa no servidor, tentando cache...", error);
+    // Last-resort fallback to standard query (which can check cache)
+    try {
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('plateNormalized', '==', normalized), limit(1));
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        return querySnapshot.docs[0].data() as UserData;
+      }
+    } catch (cacheError) {
+      console.error("Erro ao buscar no cache local:", cacheError);
+      throw error;
+    }
   }
   return null;
 }
 
-// Search for user data by syncCode
+// Search for user data by syncCode (Server-first)
 export async function findUserBySyncCode(syncCode: string): Promise<UserData | null> {
   try {
     const usersRef = collection(db, 'users');
     const q = query(usersRef, where('syncCode', '==', syncCode.trim().toUpperCase()), limit(1));
-    const querySnapshot = await getDocs(q);
+    const querySnapshot = await getDocsFromServer(q);
     if (!querySnapshot.empty) {
       const userDoc = querySnapshot.docs[0];
       return userDoc.data() as UserData;
     }
   } catch (error) {
-    console.error("Erro ao buscar código de sincronização no Firestore:", error);
-    throw error;
+    console.error("Erro ao buscar código de sincronização no servidor, tentando cache...", error);
+    // Cache fallback
+    try {
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('syncCode', '==', syncCode.trim().toUpperCase()), limit(1));
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        return querySnapshot.docs[0].data() as UserData;
+      }
+    } catch (cacheError) {
+      console.error("Erro ao buscar código de sincronização no cache local:", cacheError);
+      throw error;
+    }
   }
   return null;
 }

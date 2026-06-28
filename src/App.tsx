@@ -79,11 +79,38 @@ export default function App() {
   // Ref to track the last saved state to prevent redundant writes or initial overwrites
   const lastSavedRef = useRef<string>('');
 
-  // Initialize state directly with initial/empty state (will be loaded from cloud immediately if userId is present)
-  // No localStorage fallback for vehicle data to ensure 100% clean cloud-first architecture
-  const [vehicle, setVehicle] = useState<Vehicle>(INITIAL_VEHICLE);
-  const [fuelLogs, setFuelLogs] = useState<FuelLog[]>([]);
-  const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>([]);
+  // Initialize state directly with local storage cache as a fast and reliable offline-ready fallback,
+  // preventing any data-loss or empty-render flickering upon page refresh.
+  const [vehicle, setVehicle] = useState<Vehicle>(() => {
+    const saved = localStorage.getItem('car_tracker_vehicle_v2');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return INITIAL_VEHICLE;
+  });
+
+  const [fuelLogs, setFuelLogs] = useState<FuelLog[]>(() => {
+    const saved = localStorage.getItem('car_tracker_fuel_logs_v2');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return [];
+  });
+
+  const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>(() => {
+    const saved = localStorage.getItem('car_tracker_maint_logs_v2');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return [];
+  });
+
+  // Keep the local storage cache updated synchronously in real-time as an instant failsafe
+  useEffect(() => {
+    localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
+    localStorage.setItem('car_tracker_fuel_logs_v2', JSON.stringify(fuelLogs));
+    localStorage.setItem('car_tracker_maint_logs_v2', JSON.stringify(maintenanceLogs));
+  }, [vehicle, fuelLogs, maintenanceLogs]);
 
   const [isFuelModalOpen, setIsFuelModalOpen] = useState(false);
   const [isMaintModalOpen, setIsMaintModalOpen] = useState(false);
@@ -95,6 +122,13 @@ export default function App() {
   useEffect(() => {
     if (!userId) {
       setCloudLoaded(false);
+      return;
+    }
+
+    // CRITICAL RACE-CONDITION GUARD: If cloudLoaded is already true (meaning registration
+    // or login flow has just set up the fresh/loaded states), skip executing initCloudData
+    // in the background to prevent stale cloud fetch from overwriting user modifications.
+    if (cloudLoaded) {
       return;
     }
 
@@ -113,14 +147,16 @@ export default function App() {
 
         const cloudData = await loadUserData(userId);
         if (cloudData) {
-          setVehicle(cloudData.vehicle);
-          setFuelLogs(cloudData.fuelLogs);
-          setMaintenanceLogs(cloudData.maintenanceLogs);
+          setVehicle(cloudData.vehicle || INITIAL_VEHICLE);
+          setFuelLogs(cloudData.fuelLogs || []);
+          setMaintenanceLogs(cloudData.maintenanceLogs || []);
+          
           lastSavedRef.current = JSON.stringify({
-            vehicle: cloudData.vehicle,
-            fuelLogs: cloudData.fuelLogs,
-            maintenanceLogs: cloudData.maintenanceLogs
+            vehicle: cloudData.vehicle || INITIAL_VEHICLE,
+            fuelLogs: cloudData.fuelLogs || [],
+            maintenanceLogs: cloudData.maintenanceLogs || []
           });
+          
           setSyncStatus('connected');
           setCloudLoaded(true); // Only mark as loaded when cloud fetch is completely successful
         } else {
@@ -139,15 +175,21 @@ export default function App() {
         }
       } catch (err) {
         console.error("Erro ao inicializar dados com Firestore:", err);
-        setSyncStatus('error');
-        // CRITICAL: We DO NOT set cloudLoaded to true on failure.
-        // This blocks the auto-save useEffect from overwriting cloud data with empty state if loading failed!
+        // offline/cache safety: If we already have cached local data, let the user inside in offline mode
+        const cachedVehicleExists = localStorage.getItem('car_tracker_vehicle_v2');
+        if (cachedVehicleExists) {
+          console.warn("Utilizando cache local devido à indisponibilidade do servidor.");
+          setSyncStatus('offline');
+          setCloudLoaded(true);
+        } else {
+          setSyncStatus('error');
+        }
       }
     }
     initCloudData();
   }, [userId]);
 
-  // 2. Auto-save local updates to the cloud (with debounce)
+  // 2. Auto-save local updates to the cloud (with quick 500ms debounce)
   useEffect(() => {
     if (!cloudLoaded || !userId || !syncCode) return;
 
@@ -171,7 +213,7 @@ export default function App() {
           setSyncStatus('error');
           setIsSyncing(false);
         });
-    }, 1000);
+    }, 500);
 
     return () => clearTimeout(delayDebounceFn);
   }, [vehicle, fuelLogs, maintenanceLogs, userId, syncCode, cloudLoaded]);
