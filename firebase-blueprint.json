@@ -1,0 +1,86 @@
+{
+  "entities": {
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Dados do veículo cadastrado",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "brand": { "type": "string" },
+        "plate": { "type": "string" },
+        "year": { "type": "string" },
+        "currentOdometer": { "type": "number" },
+        "renavam": { "type": "string" },
+        "chassi": { "type": "string" },
+        "motorNumber": { "type": "string" },
+        "power": { "type": "string" },
+        "displacement": { "type": "string" },
+        "color": { "type": "string" }
+      },
+      "required": ["id", "name", "brand", "currentOdometer"]
+    },
+    "FuelLog": {
+      "title": "FuelLog",
+      "description": "Registro de abastecimento do veículo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "date": { "type": "string" },
+        "odometer": { "type": "number" },
+        "pricePerLiter": { "type": "number" },
+        "liters": { "type": "number" },
+        "totalPrice": { "type": "number" },
+        "fuelType": { "type": "string" },
+        "gasStation": { "type": "string" }
+      },
+      "required": ["id", "vehicleId", "date", "odometer", "pricePerLiter", "liters", "totalPrice", "fuelType"]
+    },
+    "MaintenanceLog": {
+      "title": "MaintenanceLog",
+      "description": "Registro de manutenção ou avaria do veículo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string" },
+        "odometer": { "type": "number" },
+        "cost": { "type": "number" },
+        "workshop": { "type": "string" },
+        "nextOdometerLimit": { "type": "number" },
+        "nextDateLimit": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "vehicleId", "date", "description", "type", "odometer", "cost", "status"]
+    },
+    "UserData": {
+      "title": "UserData",
+      "description": "Documento completo de sincronização do usuário",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "syncCode": { "type": "string" },
+        "vehicle": { "$ref": "#/entities/Vehicle" },
+        "fuelLogs": {
+          "type": "array",
+          "items": { "$ref": "#/entities/FuelLog" }
+        },
+        "maintenanceLogs": {
+          "type": "array",
+          "items": { "$ref": "#/entities/MaintenanceLog" }
+        },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "syncCode", "vehicle", "fuelLogs", "maintenanceLogs", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserData",
+      "description": "Sincronização na nuvem dos dados do Golzinho para cada usuário"
+    }
+  }
+}

@@ -18,10 +18,54 @@ import {
   AlertTriangle,
   Car,
   CheckCircle2,
-  ListFilter
+  ListFilter,
+  Cloud,
+  CloudOff,
+  Copy,
+  Check,
+  Key,
+  Loader2
 } from 'lucide-react';
+import { getDocFromServer, doc } from 'firebase/firestore';
+import { 
+  db, 
+  generateSyncCode, 
+  generateUserId, 
+  saveUserData, 
+  loadUserData, 
+  findUserBySyncCode 
+} from './firebase';
 
 export default function App() {
+  // Cloud Sync state
+  const [userId, setUserId] = useState<string>(() => {
+    let saved = localStorage.getItem('golzinho_user_id');
+    if (!saved) {
+      saved = generateUserId();
+      localStorage.setItem('golzinho_user_id', saved);
+    }
+    return saved;
+  });
+
+  const [syncCode, setSyncCode] = useState<string>(() => {
+    let saved = localStorage.getItem('golzinho_sync_code');
+    if (!saved) {
+      saved = generateSyncCode();
+      localStorage.setItem('golzinho_sync_code', saved);
+    }
+    return saved;
+  });
+
+  const [cloudLoaded, setCloudLoaded] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'connected' | 'syncing' | 'offline' | 'error'>('connected');
+  const [isSyncing, setIsSyncing] = useState(false);
+  
+  // UI helper states for cloud sync
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [inputSyncCode, setInputSyncCode] = useState('');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncSuccess, setSyncSuccess] = useState(false);
+
   // Initialize state from local storage or initial seed data
   const [vehicle, setVehicle] = useState<Vehicle>(() => {
     const saved = localStorage.getItem('car_tracker_vehicle_v2');
@@ -53,18 +97,69 @@ export default function App() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<boolean>(false);
 
-  // Sync to local storage whenever state changes
+  // 1. Initial Load of cloud data on mount / userId change
   useEffect(() => {
+    async function initCloudData() {
+      try {
+        setSyncStatus('syncing');
+        // Test connection
+        try {
+          await getDocFromServer(doc(db, 'test', 'connection'));
+        } catch (e: any) {
+          if (e instanceof Error && e.message.includes('the client is offline')) {
+            console.warn("Client offline on connection test.");
+            setSyncStatus('offline');
+          }
+        }
+
+        const cloudData = await loadUserData(userId);
+        if (cloudData) {
+          setVehicle(cloudData.vehicle);
+          setFuelLogs(cloudData.fuelLogs);
+          setMaintenanceLogs(cloudData.maintenanceLogs);
+        } else {
+          // If no cloud data exists yet, seed the cloud database with current local data
+          await saveUserData(userId, syncCode, vehicle, fuelLogs, maintenanceLogs);
+        }
+        setSyncStatus('connected');
+      } catch (err) {
+        console.error("Erro ao inicializar dados com Firestore:", err);
+        setSyncStatus('error');
+      } finally {
+        setCloudLoaded(true);
+      }
+    }
+    initCloudData();
+  }, [userId]);
+
+  // 2. Auto-save local updates to the cloud (with debounce)
+  useEffect(() => {
+    if (!cloudLoaded) return;
+
+    // Save to localStorage immediately as local cache
     localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
-  }, [vehicle]);
-
-  useEffect(() => {
     localStorage.setItem('car_tracker_fuel_logs_v2', JSON.stringify(fuelLogs));
-  }, [fuelLogs]);
-
-  useEffect(() => {
     localStorage.setItem('car_tracker_maint_logs_v2', JSON.stringify(maintenanceLogs));
-  }, [maintenanceLogs]);
+
+    // Sync to cloud
+    if (userId && syncCode) {
+      setIsSyncing(true);
+      setSyncStatus('syncing');
+      const delayDebounceFn = setTimeout(() => {
+        saveUserData(userId, syncCode, vehicle, fuelLogs, maintenanceLogs)
+          .then(() => {
+            setSyncStatus('connected');
+            setIsSyncing(false);
+          })
+          .catch((err) => {
+            console.error("Erro ao sincronizar com Firestore:", err);
+            setSyncStatus('error');
+            setIsSyncing(false);
+          });
+      }, 1000);
+      return () => clearTimeout(delayDebounceFn);
+    }
+  }, [vehicle, fuelLogs, maintenanceLogs, userId, syncCode, cloudLoaded]);
 
   const handleUpdateVehicle = (updatedVehicle: Vehicle) => {
     setVehicle(updatedVehicle);
@@ -146,6 +241,52 @@ export default function App() {
       setVehicle(freshVehicle);
       setFuelLogs([]);
       setMaintenanceLogs([]);
+    }
+  };
+
+  // Copy sync code to clipboard
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(syncCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  // Connect / load existing database from cloud using sync code
+  const handleConnectSyncCode = async () => {
+    if (!inputSyncCode.trim()) {
+      setSyncError('Por favor, informe um código de sincronização.');
+      return;
+    }
+    
+    setSyncStatus('syncing');
+    setSyncError(null);
+    setSyncSuccess(false);
+
+    try {
+      const cloudData = await findUserBySyncCode(inputSyncCode);
+      if (cloudData) {
+        // Update local session
+        setUserId(cloudData.userId);
+        setSyncCode(cloudData.syncCode);
+        setVehicle(cloudData.vehicle);
+        setFuelLogs(cloudData.fuelLogs);
+        setMaintenanceLogs(cloudData.maintenanceLogs);
+        
+        localStorage.setItem('golzinho_user_id', cloudData.userId);
+        localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
+        
+        setSyncSuccess(true);
+        setInputSyncCode('');
+        setSyncStatus('connected');
+        setTimeout(() => setSyncSuccess(false), 4000);
+      } else {
+        setSyncError('Código de sincronização não encontrado ou incorreto.');
+        setSyncStatus('error');
+      }
+    } catch (err) {
+      console.error("Erro ao conectar código de sincronização:", err);
+      setSyncError('Falha ao conectar com o servidor da nuvem.');
+      setSyncStatus('error');
     }
   };
 
@@ -268,6 +409,99 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-4 md:px-6 mt-5 space-y-5" id="main-content">
+        
+        {/* Cloud Synchronization Panel */}
+        <div className="bg-slate-900 border border-slate-850 p-4 rounded-xl shadow-lg flex flex-col lg:flex-row lg:items-center justify-between gap-5" id="cloud-sync-panel">
+          <div className="flex items-start gap-3">
+            <div className={`p-2.5 rounded-lg flex-shrink-0 ${
+              syncStatus === 'syncing' ? 'bg-indigo-950/50 text-indigo-400 border border-indigo-900/30' :
+              syncStatus === 'offline' ? 'bg-amber-955/15 text-amber-500 border border-amber-900/30' :
+              syncStatus === 'error' ? 'bg-rose-950/50 text-rose-400 border border-rose-900/30' :
+              'bg-emerald-950/50 text-emerald-400 border border-emerald-900/30'
+            }`}>
+              {syncStatus === 'syncing' ? <Loader2 className="w-5 h-5 animate-spin" /> :
+               syncStatus === 'offline' ? <CloudOff className="w-5 h-5" /> :
+               syncStatus === 'error' ? <CloudOff className="w-5 h-5" /> :
+               <Cloud className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-bold text-xs uppercase tracking-wide text-white flex items-center gap-1.5">
+                  Sincronização em Nuvem <span className="text-emerald-400 text-[10px] font-normal">(100% Seguro)</span>
+                </h3>
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                  syncStatus === 'syncing' ? 'bg-indigo-950/50 text-indigo-400 border border-indigo-900/30 animate-pulse' :
+                  syncStatus === 'offline' ? 'bg-amber-950/50 text-amber-400 border border-amber-900/30' :
+                  syncStatus === 'error' ? 'bg-rose-950/50 text-rose-400 border border-rose-900/30' :
+                  'bg-emerald-950/50 text-emerald-400 border border-emerald-900/30'
+                }`}>
+                  {syncStatus === 'syncing' ? 'Sincronizando...' :
+                   syncStatus === 'offline' ? 'Modo Offline' :
+                   syncStatus === 'error' ? 'Erro na Nuvem' :
+                   'Conectado'}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1 max-w-xl leading-relaxed">
+                Seus dados de abastecimento e manutenção estão 100% seguros na nuvem. Use o seu código exclusivo abaixo para recuperar seus dados ou acessar em outro aparelho caso limpe o navegador.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            {/* Sync Code display */}
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-2 px-3.5 flex items-center justify-between gap-4">
+              <div className="flex flex-col">
+                <span className="text-[8px] uppercase tracking-widest text-slate-500 font-extrabold font-sans">Código da Nuvem</span>
+                <span className="font-mono font-bold text-slate-100 text-xs tracking-widest">{syncCode}</span>
+              </div>
+              <button 
+                onClick={handleCopyCode}
+                className="p-1.5 hover:bg-slate-900 rounded-lg text-slate-400 hover:text-white transition cursor-pointer"
+                title="Copiar código de sincronização"
+              >
+                {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            {/* Input to connect other code */}
+            <div className="flex items-center gap-1.5">
+              <input 
+                type="text" 
+                value={inputSyncCode}
+                onChange={(e) => setInputSyncCode(e.target.value.toUpperCase())}
+                placeholder="Digitar Código" 
+                className="bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-650 focus:outline-none focus:border-indigo-500 transition w-full uppercase max-w-[130px]"
+              />
+              <button 
+                onClick={handleConnectSyncCode}
+                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <Key className="w-3 h-3" /> Conectar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Sync Success / Error alerts */}
+        {syncSuccess && (
+          <div className="p-3.5 bg-emerald-950/40 border border-emerald-900/40 rounded-xl flex items-start gap-3 text-emerald-400 text-xs text-slate-300">
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" />
+            <div>
+              <p className="font-bold uppercase tracking-wider text-[10px]">Dados Carregados da Nuvem!</p>
+              <p className="text-slate-400 mt-0.5">Sua conta foi sincronizada com sucesso e todos os dados foram recuperados.</p>
+            </div>
+          </div>
+        )}
+
+        {syncError && (
+          <div className="p-3.5 bg-rose-950/40 border border-rose-900/40 rounded-xl flex items-start gap-3 text-rose-400 text-xs text-slate-350">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />
+            <div>
+              <p className="font-bold uppercase tracking-wider text-[10px]">Falha na Sincronização</p>
+              <p className="text-slate-400 mt-0.5">{syncError}</p>
+            </div>
+          </div>
+        )}
         
         {/* Import Notification Alerts */}
         {importError && (
