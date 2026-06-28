@@ -102,11 +102,11 @@ export default function App() {
     async function initCloudData() {
       try {
         setSyncStatus('syncing');
-        // Test connection
+        // Test connection using an allowed document path to avoid security rules permission errors
         try {
-          await getDocFromServer(doc(db, 'test', 'connection'));
+          await getDocFromServer(doc(db, 'users', 'connection_test'));
         } catch (e: any) {
-          if (e instanceof Error && e.message.includes('the client is offline')) {
+          if (e instanceof Error && (e.message.toLowerCase().includes('offline') || e.message.toLowerCase().includes('unavailable'))) {
             console.warn("Client offline on connection test.");
             setSyncStatus('offline');
           }

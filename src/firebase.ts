@@ -74,6 +74,7 @@ export async function loadUserData(userId: string): Promise<UserData | null> {
     }
   } catch (error) {
     console.error("Erro ao carregar dados do usuário no Firestore:", error);
+    throw error;
   }
   return null;
 }
@@ -90,6 +91,7 @@ export async function findUserBySyncCode(syncCode: string): Promise<UserData | n
     }
   } catch (error) {
     console.error("Erro ao buscar código de sincronização no Firestore:", error);
+    throw error;
   }
   return null;
 }
