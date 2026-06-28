@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent } from 'react';
+import { useState, useEffect, ChangeEvent, FormEvent } from 'react';
 import { Vehicle, FuelLog, MaintenanceLog } from './types';
 import { INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS } from './initialData';
 import { enrichFuelLogsWithConsumption, calculateOverallStats, getMonthlySpendData } from './utils';
@@ -33,27 +33,22 @@ import {
   generateUserId, 
   saveUserData, 
   loadUserData, 
-  findUserBySyncCode 
+  findUserBySyncCode,
+  findUserByPlate
 } from './firebase';
 
 export default function App() {
   // Cloud Sync state
   const [userId, setUserId] = useState<string>(() => {
-    let saved = localStorage.getItem('golzinho_user_id');
-    if (!saved) {
-      saved = generateUserId();
-      localStorage.setItem('golzinho_user_id', saved);
-    }
-    return saved;
+    return localStorage.getItem('golzinho_user_id') || '';
   });
 
   const [syncCode, setSyncCode] = useState<string>(() => {
-    let saved = localStorage.getItem('golzinho_sync_code');
-    if (!saved) {
-      saved = generateSyncCode();
-      localStorage.setItem('golzinho_sync_code', saved);
-    }
-    return saved;
+    return localStorage.getItem('golzinho_sync_code') || '';
+  });
+
+  const [isIdentified, setIsIdentified] = useState<boolean>(() => {
+    return !!localStorage.getItem('golzinho_user_id');
   });
 
   const [cloudLoaded, setCloudLoaded] = useState(false);
@@ -65,6 +60,21 @@ export default function App() {
   const [inputSyncCode, setInputSyncCode] = useState('');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState(false);
+
+  // Identity Portal State
+  const [portalTab, setPortalTab] = useState<'login' | 'register'>('login');
+  const [portalPlate, setPortalPlate] = useState('');
+  const [portalSyncCode, setPortalSyncCode] = useState('');
+  
+  // Registration fields
+  const [regPlate, setRegPlate] = useState('');
+  const [regBrand, setRegBrand] = useState('Volkswagen');
+  const [regName, setRegName] = useState('Gol G4');
+  const [regYear, setRegYear] = useState('2008');
+  const [regOdometer, setRegOdometer] = useState('120000');
+  
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
 
   // Initialize state from local storage or initial seed data
   const [vehicle, setVehicle] = useState<Vehicle>(() => {
@@ -99,6 +109,11 @@ export default function App() {
 
   // 1. Initial Load of cloud data on mount / userId change
   useEffect(() => {
+    if (!userId) {
+      setCloudLoaded(false);
+      return;
+    }
+
     async function initCloudData() {
       try {
         setSyncStatus('syncing');
@@ -134,7 +149,7 @@ export default function App() {
 
   // 2. Auto-save local updates to the cloud (with debounce)
   useEffect(() => {
-    if (!cloudLoaded) return;
+    if (!cloudLoaded || !userId) return;
 
     // Save to localStorage immediately as local cache
     localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
@@ -241,6 +256,143 @@ export default function App() {
       setVehicle(freshVehicle);
       setFuelLogs([]);
       setMaintenanceLogs([]);
+    }
+  };
+
+  // Handle portal login (either by plate or sync code)
+  const handlePortalLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setPortalError(null);
+    const searchPlate = portalPlate.trim();
+    const searchCode = portalSyncCode.trim();
+    
+    if (!searchPlate && !searchCode) {
+      setPortalError('Por favor, informe a Placa do Veículo ou o Código de Sincronização.');
+      return;
+    }
+
+    setPortalLoading(true);
+    try {
+      let cloudData = null;
+      if (searchPlate) {
+        cloudData = await findUserByPlate(searchPlate);
+      } else if (searchCode) {
+        cloudData = await findUserBySyncCode(searchCode);
+      }
+
+      if (cloudData) {
+        // Active load of cloud data
+        setUserId(cloudData.userId);
+        setSyncCode(cloudData.syncCode);
+        setVehicle(cloudData.vehicle);
+        setFuelLogs(cloudData.fuelLogs);
+        setMaintenanceLogs(cloudData.maintenanceLogs);
+
+        localStorage.setItem('golzinho_user_id', cloudData.userId);
+        localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
+        setIsIdentified(true);
+        setSyncSuccess(true);
+        setTimeout(() => setSyncSuccess(false), 4000);
+      } else {
+        if (searchPlate) {
+          setPortalError(`Nenhum veículo encontrado com a placa ${searchPlate.toUpperCase()}. Verifique a placa ou crie um novo cadastro.`);
+        } else {
+          setPortalError('Código de sincronização inválido ou inexistente.');
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao autenticar no portal:", err);
+      setPortalError('Ocorreu uma falha de conexão com a nuvem. Tente novamente.');
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  // Handle portal vehicle registration
+  const handlePortalRegister = async (e: FormEvent) => {
+    e.preventDefault();
+    setPortalError(null);
+
+    const plateVal = regPlate.trim().toUpperCase();
+    const brandVal = regBrand.trim();
+    const nameVal = regName.trim();
+    const yearVal = regYear.trim();
+    const odomVal = parseInt(regOdometer.trim()) || 0;
+
+    if (!plateVal) {
+      setPortalError('A Placa do Veículo é obrigatória para salvar na nuvem.');
+      return;
+    }
+    if (!brandVal || !nameVal) {
+      setPortalError('Marca e Modelo são obrigatórios.');
+      return;
+    }
+
+    const normalizedPlate = plateVal.replace(/[^A-Z0-9]/g, '');
+    if (normalizedPlate.length < 3) {
+      setPortalError('Por favor, informe uma placa de veículo válida.');
+      return;
+    }
+
+    setPortalLoading(true);
+    try {
+      // Check for duplicates
+      const existing = await findUserByPlate(normalizedPlate);
+      if (existing) {
+        setPortalError(`A placa ${plateVal} já está cadastrada! Volte na aba "Acessar" para entrar.`);
+        setPortalLoading(false);
+        return;
+      }
+
+      const generatedId = `placa_${normalizedPlate}`;
+      const generatedCode = generateSyncCode();
+      const newVehicle: Vehicle = {
+        id: `vehicle-${Date.now()}`,
+        name: nameVal,
+        brand: brandVal,
+        plate: plateVal,
+        year: yearVal || undefined,
+        currentOdometer: odomVal,
+      };
+
+      // Save initial state to cloud
+      await saveUserData(generatedId, generatedCode, newVehicle, [], []);
+
+      setUserId(generatedId);
+      setSyncCode(generatedCode);
+      setVehicle(newVehicle);
+      setFuelLogs([]);
+      setMaintenanceLogs([]);
+
+      localStorage.setItem('golzinho_user_id', generatedId);
+      localStorage.setItem('golzinho_sync_code', generatedCode);
+      setIsIdentified(true);
+      setSyncSuccess(true);
+      setTimeout(() => setSyncSuccess(false), 4000);
+    } catch (err) {
+      console.error("Erro ao registrar veículo:", err);
+      setPortalError('Erro ao salvar veículo na nuvem. Verifique sua conexão.');
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  // Disconnect active session
+  const handleLogout = () => {
+    if (confirm('Deseja desconectar deste veículo? Seus dados continuam 100% seguros na nuvem e você poderá entrar novamente a qualquer momento digitando a placa.')) {
+      localStorage.removeItem('golzinho_user_id');
+      localStorage.removeItem('golzinho_sync_code');
+      localStorage.removeItem('car_tracker_vehicle_v2');
+      localStorage.removeItem('car_tracker_fuel_logs_v2');
+      localStorage.removeItem('car_tracker_maint_logs_v2');
+      
+      setUserId('');
+      setSyncCode('');
+      setVehicle(INITIAL_VEHICLE);
+      setFuelLogs([]);
+      setMaintenanceLogs([]);
+      setCloudLoaded(false);
+      setIsIdentified(false);
     }
   };
 
@@ -361,6 +513,211 @@ export default function App() {
     return kmMatches || dateMatches;
   });
 
+  if (!isIdentified) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col justify-center items-center p-4 relative overflow-hidden" id="identity-portal-root">
+        {/* Background glow effects */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-1/4 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none" />
+
+        <div className="w-full max-w-md bg-slate-900 border border-slate-850 rounded-2xl shadow-2xl p-6 sm:p-8 relative z-10">
+          
+          {/* Logo Header */}
+          <div className="flex flex-col items-center text-center mb-8">
+            <div className="p-4 bg-emerald-600 text-white rounded-2xl shadow-lg shadow-emerald-900/30 mb-4">
+              <Car className="w-8 h-8" />
+            </div>
+            <h1 className="text-2xl font-extrabold text-white tracking-widest uppercase">
+              GOLZINHO <span className="text-emerald-500 font-black">NUVEM</span>
+            </h1>
+            <p className="text-xs text-slate-400 mt-1 uppercase tracking-wider font-semibold">Sincronização 100% Automática</p>
+            <p className="text-[11px] text-slate-500 mt-2 max-w-sm">
+              Todos os seus dados de consumo, combustível e manutenção salvos permanentemente na nuvem. Nunca perca nada, mesmo ao limpar os dados do navegador.
+            </p>
+          </div>
+
+          {/* Tab Selector */}
+          <div className="flex border-b border-slate-800 mb-6">
+            <button
+              onClick={() => { setPortalTab('login'); setPortalError(null); }}
+              className={`flex-1 pb-3 text-sm font-bold border-b-2 transition uppercase tracking-wider cursor-pointer ${
+                portalTab === 'login' 
+                  ? 'border-emerald-500 text-emerald-500 font-extrabold' 
+                  : 'border-transparent text-slate-400 hover:text-slate-350'
+              }`}
+            >
+              Acessar Veículo
+            </button>
+            <button
+              onClick={() => { setPortalTab('register'); setPortalError(null); }}
+              className={`flex-1 pb-3 text-sm font-bold border-b-2 transition uppercase tracking-wider cursor-pointer ${
+                portalTab === 'register' 
+                  ? 'border-emerald-500 text-emerald-500 font-extrabold' 
+                  : 'border-transparent text-slate-400 hover:text-slate-350'
+              }`}
+            >
+              Novo Cadastro
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          {portalTab === 'login' ? (
+            <form onSubmit={handlePortalLogin} className="space-y-4">
+              <div>
+                <label className="block text-[10px] text-slate-400 font-bold mb-1.5 uppercase tracking-wider">Acessar pela Placa do Veículo</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Ex: ABC-1234 ou GOL-1994"
+                    value={portalPlate}
+                    onChange={(e) => setPortalPlate(e.target.value.toUpperCase())}
+                    className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono tracking-widest text-center text-sm"
+                    disabled={portalLoading}
+                  />
+                </div>
+              </div>
+
+              <div className="relative flex py-2 items-center">
+                <div className="flex-grow border-t border-slate-800"></div>
+                <span className="flex-shrink mx-4 text-[9px] text-slate-500 font-bold uppercase tracking-wider">Ou</span>
+                <div className="flex-grow border-t border-slate-800"></div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-400 font-bold mb-1.5 uppercase tracking-wider">Código de Sincronização (Backup)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: GOL-123456"
+                  value={portalSyncCode}
+                  onChange={(e) => setPortalSyncCode(e.target.value.toUpperCase())}
+                  className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono tracking-widest text-center text-sm"
+                  disabled={portalLoading}
+                />
+              </div>
+
+              {portalError && (
+                <div className="p-3 bg-rose-950/40 border border-rose-900/50 rounded-xl text-rose-400 text-xs text-center font-medium leading-relaxed">
+                  {portalError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={portalLoading}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/20"
+              >
+                {portalLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Conectando...
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-4 h-4" /> Entrar no Painel do Veículo
+                  </>
+                )}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handlePortalRegister} className="space-y-4">
+              <div>
+                <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Placa do Veículo (Única)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: GOL-1994"
+                  value={regPlate}
+                  onChange={(e) => setRegPlate(e.target.value.toUpperCase())}
+                  className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 placeholder-slate-650 focus:outline-none focus:border-emerald-500 font-mono text-center tracking-wider text-sm"
+                  required
+                  disabled={portalLoading}
+                />
+                <p className="text-[9px] text-slate-500 mt-1">Essa placa será sua chave de acesso permanente na nuvem.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Marca</label>
+                  <input
+                    type="text"
+                    value={regBrand}
+                    onChange={(e) => setRegBrand(e.target.value)}
+                    className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs"
+                    required
+                    disabled={portalLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Modelo</label>
+                  <input
+                    type="text"
+                    value={regName}
+                    onChange={(e) => setRegName(e.target.value)}
+                    className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs"
+                    required
+                    disabled={portalLoading}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Ano</label>
+                  <input
+                    type="text"
+                    value={regYear}
+                    onChange={(e) => setRegYear(e.target.value)}
+                    className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs"
+                    placeholder="Ex: 2008"
+                    disabled={portalLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Odômetro Inicial</label>
+                  <input
+                    type="number"
+                    value={regOdometer}
+                    onChange={(e) => setRegOdometer(e.target.value)}
+                    className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs font-mono"
+                    placeholder="Ex: 120000"
+                    disabled={portalLoading}
+                  />
+                </div>
+              </div>
+
+              {portalError && (
+                <div className="p-3 bg-rose-950/40 border border-rose-900/50 rounded-xl text-rose-400 text-xs text-center font-medium leading-relaxed">
+                  {portalError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={portalLoading}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/20 text-xs uppercase tracking-wider"
+              >
+                {portalLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Salvando na Nuvem...
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="w-4 h-4" /> Criar Espaço na Nuvem
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          {/* Safe cloud storage disclaimer */}
+          <div className="mt-6 pt-4 border-t border-slate-800/60 flex items-center gap-2 text-[10px] text-slate-500 justify-center">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+            <span>Conexão segura com Firebase Firestore ativa</span>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans leading-relaxed pb-16" id="app-root">
       
@@ -381,6 +738,15 @@ export default function App() {
 
           {/* Backup, Import and Defaults actions */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
+            {/* Switch Vehicle Cloud Button */}
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 bg-emerald-950/20 hover:bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 hover:text-emerald-350 rounded-lg font-semibold transition flex items-center gap-1.5 cursor-pointer"
+              title="Sair ou trocar de veículo na nuvem"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Trocar Veículo
+            </button>
+
             {/* Backup Export */}
             <button
               onClick={handleExportData}
@@ -479,6 +845,16 @@ export default function App() {
                 <Key className="w-3 h-3" /> Conectar
               </button>
             </div>
+
+            {/* Disconnect/Switch vehicle button */}
+            <button
+              onClick={handleLogout}
+              className="px-3.5 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-850 hover:border-slate-700 text-slate-350 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              title="Sair do veículo atual para conectar outro"
+            >
+              <RefreshCw className="w-3 h-3 text-slate-500 hover:text-white transition" />
+              Trocar Veículo
+            </button>
           </div>
         </div>
 

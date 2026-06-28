@@ -53,15 +53,30 @@ export async function saveUserData(
   fuelLogs: FuelLog[], 
   maintenanceLogs: MaintenanceLog[]
 ): Promise<void> {
-  const userDocRef = doc(db, 'users', userId);
-  await setDoc(userDocRef, {
+  const normalized = (vehicle.plate || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const dataToSave = {
     userId,
     syncCode,
     vehicle,
     fuelLogs,
     maintenanceLogs,
-    updatedAt: new Date().toISOString()
-  }, { merge: true });
+    updatedAt: new Date().toISOString(),
+    plateNormalized: normalized || null
+  };
+
+  // 1. Save to the active userId document
+  const userDocRef = doc(db, 'users', userId);
+  await setDoc(userDocRef, dataToSave, { merge: true });
+
+  // 2. If a plate is present, also save to a deterministic plate-based document
+  // so that even if the user clears all local storage, they can restore instantly by plate!
+  if (normalized) {
+    const plateDocRef = doc(db, 'users', `placa_${normalized}`);
+    await setDoc(plateDocRef, {
+      ...dataToSave,
+      userId: `placa_${normalized}` // ensure the deterministic ID is preserved when retrieved
+    }, { merge: true });
+  }
 }
 
 // Load user data by userId
@@ -74,6 +89,32 @@ export async function loadUserData(userId: string): Promise<UserData | null> {
     }
   } catch (error) {
     console.error("Erro ao carregar dados do usuário no Firestore:", error);
+    throw error;
+  }
+  return null;
+}
+
+// Search for user data by vehicle plate
+export async function findUserByPlate(plate: string): Promise<UserData | null> {
+  const normalized = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!normalized) return null;
+  try {
+    // Try deterministic document fetch first (super fast & direct)
+    const plateDocRef = doc(db, 'users', `placa_${normalized}`);
+    const docSnap = await getDoc(plateDocRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as UserData;
+    }
+
+    // Fallback to query
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('plateNormalized', '==', normalized), limit(1));
+    const querySnapshot = await getDocs(q);
+    if (!querySnapshot.empty) {
+      return querySnapshot.docs[0].data() as UserData;
+    }
+  } catch (error) {
+    console.error("Erro ao buscar veículo pela placa no Firestore:", error);
     throw error;
   }
   return null;
