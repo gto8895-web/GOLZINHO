@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent, FormEvent } from 'react';
+import { useState, useEffect, ChangeEvent, FormEvent, useRef } from 'react';
 import { Vehicle, FuelLog, MaintenanceLog } from './types';
 import { INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS } from './initialData';
 import { enrichFuelLogsWithConsumption, calculateOverallStats, getMonthlySpendData } from './utils';
@@ -76,30 +76,14 @@ export default function App() {
   const [portalLoading, setPortalLoading] = useState(false);
   const [portalError, setPortalError] = useState<string | null>(null);
 
-  // Initialize state from local storage or initial seed data
-  const [vehicle, setVehicle] = useState<Vehicle>(() => {
-    const saved = localStorage.getItem('car_tracker_vehicle_v2');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
-    }
-    return INITIAL_VEHICLE;
-  });
+  // Ref to track the last saved state to prevent redundant writes or initial overwrites
+  const lastSavedRef = useRef<string>('');
 
-  const [fuelLogs, setFuelLogs] = useState<FuelLog[]>(() => {
-    const saved = localStorage.getItem('car_tracker_fuel_logs_v2');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
-    }
-    return INITIAL_FUEL_LOGS;
-  });
-
-  const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>(() => {
-    const saved = localStorage.getItem('car_tracker_maint_logs_v2');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
-    }
-    return INITIAL_MAINTENANCE_LOGS;
-  });
+  // Initialize state directly with initial/empty state (will be loaded from cloud immediately if userId is present)
+  // No localStorage fallback for vehicle data to ensure 100% clean cloud-first architecture
+  const [vehicle, setVehicle] = useState<Vehicle>(INITIAL_VEHICLE);
+  const [fuelLogs, setFuelLogs] = useState<FuelLog[]>([]);
+  const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>([]);
 
   const [isFuelModalOpen, setIsFuelModalOpen] = useState(false);
   const [isMaintModalOpen, setIsMaintModalOpen] = useState(false);
@@ -132,16 +116,32 @@ export default function App() {
           setVehicle(cloudData.vehicle);
           setFuelLogs(cloudData.fuelLogs);
           setMaintenanceLogs(cloudData.maintenanceLogs);
+          lastSavedRef.current = JSON.stringify({
+            vehicle: cloudData.vehicle,
+            fuelLogs: cloudData.fuelLogs,
+            maintenanceLogs: cloudData.maintenanceLogs
+          });
+          setSyncStatus('connected');
+          setCloudLoaded(true); // Only mark as loaded when cloud fetch is completely successful
         } else {
-          // If no cloud data exists yet, seed the cloud database with current local data
-          await saveUserData(userId, syncCode, vehicle, fuelLogs, maintenanceLogs);
+          // If no cloud data exists yet, seed the cloud database with initial data
+          await saveUserData(userId, syncCode, INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS);
+          setVehicle(INITIAL_VEHICLE);
+          setFuelLogs(INITIAL_FUEL_LOGS);
+          setMaintenanceLogs(INITIAL_MAINTENANCE_LOGS);
+          lastSavedRef.current = JSON.stringify({
+            vehicle: INITIAL_VEHICLE,
+            fuelLogs: INITIAL_FUEL_LOGS,
+            maintenanceLogs: INITIAL_MAINTENANCE_LOGS
+          });
+          setSyncStatus('connected');
+          setCloudLoaded(true); // Only mark as loaded when cloud seed is completely successful
         }
-        setSyncStatus('connected');
       } catch (err) {
         console.error("Erro ao inicializar dados com Firestore:", err);
         setSyncStatus('error');
-      } finally {
-        setCloudLoaded(true);
+        // CRITICAL: We DO NOT set cloudLoaded to true on failure.
+        // This blocks the auto-save useEffect from overwriting cloud data with empty state if loading failed!
       }
     }
     initCloudData();
@@ -149,31 +149,31 @@ export default function App() {
 
   // 2. Auto-save local updates to the cloud (with debounce)
   useEffect(() => {
-    if (!cloudLoaded || !userId) return;
+    if (!cloudLoaded || !userId || !syncCode) return;
 
-    // Save to localStorage immediately as local cache
-    localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
-    localStorage.setItem('car_tracker_fuel_logs_v2', JSON.stringify(fuelLogs));
-    localStorage.setItem('car_tracker_maint_logs_v2', JSON.stringify(maintenanceLogs));
-
-    // Sync to cloud
-    if (userId && syncCode) {
-      setIsSyncing(true);
-      setSyncStatus('syncing');
-      const delayDebounceFn = setTimeout(() => {
-        saveUserData(userId, syncCode, vehicle, fuelLogs, maintenanceLogs)
-          .then(() => {
-            setSyncStatus('connected');
-            setIsSyncing(false);
-          })
-          .catch((err) => {
-            console.error("Erro ao sincronizar com Firestore:", err);
-            setSyncStatus('error');
-            setIsSyncing(false);
-          });
-      }, 1000);
-      return () => clearTimeout(delayDebounceFn);
+    const currentStr = JSON.stringify({ vehicle, fuelLogs, maintenanceLogs });
+    if (currentStr === lastSavedRef.current) {
+      return; // Skip syncing if the data hasn't changed from what is already on the server
     }
+
+    setIsSyncing(true);
+    setSyncStatus('syncing');
+
+    const delayDebounceFn = setTimeout(() => {
+      saveUserData(userId, syncCode, vehicle, fuelLogs, maintenanceLogs)
+        .then(() => {
+          lastSavedRef.current = currentStr;
+          setSyncStatus('connected');
+          setIsSyncing(false);
+        })
+        .catch((err) => {
+          console.error("Erro ao sincronizar com Firestore:", err);
+          setSyncStatus('error');
+          setIsSyncing(false);
+        });
+    }, 1000);
+
+    return () => clearTimeout(delayDebounceFn);
   }, [vehicle, fuelLogs, maintenanceLogs, userId, syncCode, cloudLoaded]);
 
   const handleUpdateVehicle = (updatedVehicle: Vehicle) => {
@@ -287,6 +287,12 @@ export default function App() {
         setVehicle(cloudData.vehicle);
         setFuelLogs(cloudData.fuelLogs);
         setMaintenanceLogs(cloudData.maintenanceLogs);
+        lastSavedRef.current = JSON.stringify({
+          vehicle: cloudData.vehicle,
+          fuelLogs: cloudData.fuelLogs,
+          maintenanceLogs: cloudData.maintenanceLogs
+        });
+        setCloudLoaded(true);
 
         localStorage.setItem('golzinho_user_id', cloudData.userId);
         localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
@@ -363,6 +369,12 @@ export default function App() {
       setVehicle(newVehicle);
       setFuelLogs([]);
       setMaintenanceLogs([]);
+      lastSavedRef.current = JSON.stringify({
+        vehicle: newVehicle,
+        fuelLogs: [],
+        maintenanceLogs: []
+      });
+      setCloudLoaded(true);
 
       localStorage.setItem('golzinho_user_id', generatedId);
       localStorage.setItem('golzinho_sync_code', generatedCode);
@@ -423,6 +435,12 @@ export default function App() {
         setVehicle(cloudData.vehicle);
         setFuelLogs(cloudData.fuelLogs);
         setMaintenanceLogs(cloudData.maintenanceLogs);
+        lastSavedRef.current = JSON.stringify({
+          vehicle: cloudData.vehicle,
+          fuelLogs: cloudData.fuelLogs,
+          maintenanceLogs: cloudData.maintenanceLogs
+        });
+        setCloudLoaded(true);
         
         localStorage.setItem('golzinho_user_id', cloudData.userId);
         localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
@@ -512,6 +530,47 @@ export default function App() {
     }
     return kmMatches || dateMatches;
   });
+
+  if (userId && !cloudLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col justify-center items-center p-4 relative overflow-hidden" id="sync-loading-root">
+        {/* Background glow effects */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-1/4 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none" />
+
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-2xl shadow-2xl p-6 text-center relative z-10">
+          {syncStatus === 'error' ? (
+            <>
+              <CloudOff className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              <h2 className="text-lg font-bold text-white uppercase tracking-wider">Falha na Sincronização</h2>
+              <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                Não foi possível carregar os dados do veículo da nuvem de forma segura. Por favor, verifique sua conexão de internet.
+              </p>
+              <button
+                onClick={() => {
+                  window.location.reload();
+                }}
+                className="mt-6 w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition cursor-pointer"
+              >
+                Tentar Novamente
+              </button>
+            </>
+          ) : (
+            <>
+              <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mx-auto mb-4" />
+              <h2 className="text-lg font-bold text-white uppercase tracking-wider">Carregando da Nuvem</h2>
+              <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                Buscando todos os seus registros de abastecimento, consumo e manutenção salvos permanentemente na nuvem...
+              </p>
+              <div className="mt-4 text-[10px] text-slate-500 font-mono">
+                ID do Veículo: {userId}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!isIdentified) {
     return (
