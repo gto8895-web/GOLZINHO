@@ -105,11 +105,12 @@ export default function App() {
     return [];
   });
 
-  // Keep the local storage cache updated synchronously in real-time as an instant failsafe
+  // Keep the local storage cache updated synchronously in real-time as an instant failsafe, tracking modification timestamps
   useEffect(() => {
     localStorage.setItem('car_tracker_vehicle_v2', JSON.stringify(vehicle));
     localStorage.setItem('car_tracker_fuel_logs_v2', JSON.stringify(fuelLogs));
     localStorage.setItem('car_tracker_maint_logs_v2', JSON.stringify(maintenanceLogs));
+    localStorage.setItem('car_tracker_updated_at', new Date().toISOString());
   }, [vehicle, fuelLogs, maintenanceLogs]);
 
   const [isFuelModalOpen, setIsFuelModalOpen] = useState(false);
@@ -147,18 +148,64 @@ export default function App() {
 
         const cloudData = await loadUserData(userId);
         if (cloudData) {
-          setVehicle(cloudData.vehicle || INITIAL_VEHICLE);
-          setFuelLogs(cloudData.fuelLogs || []);
-          setMaintenanceLogs(cloudData.maintenanceLogs || []);
-          
-          lastSavedRef.current = JSON.stringify({
-            vehicle: cloudData.vehicle || INITIAL_VEHICLE,
-            fuelLogs: cloudData.fuelLogs || [],
-            maintenanceLogs: cloudData.maintenanceLogs || []
-          });
-          
-          setSyncStatus('connected');
-          setCloudLoaded(true); // Only mark as loaded when cloud fetch is completely successful
+          // Compare local vs cloud timestamps to resolve sync conflicts beautifully
+          const cloudUpdatedAt = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
+          const localUpdatedAtStr = localStorage.getItem('car_tracker_updated_at');
+          const localUpdatedAt = localUpdatedAtStr ? new Date(localUpdatedAtStr).getTime() : 0;
+
+          if (localUpdatedAt > cloudUpdatedAt) {
+            console.log("Local changes are newer than cloud. Syncing local state to cloud.");
+            
+            let finalVehicle = vehicle;
+            let finalFuelLogs = fuelLogs;
+            let finalMaintLogs = maintenanceLogs;
+
+            const savedVeh = localStorage.getItem('car_tracker_vehicle_v2');
+            const savedFuel = localStorage.getItem('car_tracker_fuel_logs_v2');
+            const savedMaint = localStorage.getItem('car_tracker_maint_logs_v2');
+
+            if (savedVeh) {
+              try { finalVehicle = JSON.parse(savedVeh); } catch (e) {}
+            }
+            if (savedFuel) {
+              try { finalFuelLogs = JSON.parse(savedFuel); } catch (e) {}
+            }
+            if (savedMaint) {
+              try { finalMaintLogs = JSON.parse(savedMaint); } catch (e) {}
+            }
+
+            await saveUserData(userId, syncCode, finalVehicle, finalFuelLogs, finalMaintLogs);
+            
+            setVehicle(finalVehicle);
+            setFuelLogs(finalFuelLogs);
+            setMaintenanceLogs(finalMaintLogs);
+
+            lastSavedRef.current = JSON.stringify({
+              vehicle: finalVehicle,
+              fuelLogs: finalFuelLogs,
+              maintenanceLogs: finalMaintLogs
+            });
+            setSyncStatus('connected');
+            setCloudLoaded(true);
+          } else {
+            console.log("Cloud data is newer or equal to local. Loading cloud state.");
+            const loadedVeh = cloudData.vehicle || INITIAL_VEHICLE;
+            const loadedFuel = cloudData.fuelLogs || [];
+            const loadedMaint = cloudData.maintenanceLogs || [];
+
+            setVehicle(loadedVeh);
+            setFuelLogs(loadedFuel);
+            setMaintenanceLogs(loadedMaint);
+            
+            lastSavedRef.current = JSON.stringify({
+              vehicle: loadedVeh,
+              fuelLogs: loadedFuel,
+              maintenanceLogs: loadedMaint
+            });
+            
+            setSyncStatus('connected');
+            setCloudLoaded(true);
+          }
         } else {
           // If no cloud data exists yet, seed the cloud database with initial data
           await saveUserData(userId, syncCode, INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS);

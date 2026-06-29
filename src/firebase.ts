@@ -1,6 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, 
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   doc, 
   getDoc, 
   getDocFromServer,
@@ -24,8 +27,22 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-// Connect using the custom databaseId provided in config
-export const db = getFirestore(app, "ai-studio-golzinho-0995fe15-3271-4878-b89e-6cb9c0110c9b");
+const DATABASE_ID = "ai-studio-golzinho-0995fe15-3271-4878-b89e-6cb9c0110c9b";
+
+// Robust database initialization with try-catch fallback for iframe and permission restrictions
+let tempDb;
+try {
+  tempDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  }, DATABASE_ID);
+} catch (e) {
+  console.warn("Erro ao inicializar cache persistente do Firestore. Usando conexão padrão:", e);
+  tempDb = getFirestore(app, DATABASE_ID);
+}
+
+export const db = tempDb;
 
 export interface UserData {
   userId: string;
@@ -34,6 +51,71 @@ export interface UserData {
   fuelLogs: FuelLog[];
   maintenanceLogs: MaintenanceLog[];
   updatedAt: string;
+}
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+// Global error handler required by Firebase Integration guidelines
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+      emailVerified: null,
+      isAnonymous: null,
+      tenantId: null,
+      providerInfo: []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Recursively sanitizes data to ensure no undefined values are written to Firestore
+export function sanitizeForFirestore(obj: any): any {
+  if (obj === null) return null;
+  if (obj === undefined) return null;
+  if (typeof obj !== 'object') return obj;
+
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeForFirestore);
+  }
+
+  const sanitized: { [key: string]: any } = {};
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+    if (value !== undefined) {
+      sanitized[key] = sanitizeForFirestore(value);
+    }
+  }
+  return sanitized;
 }
 
 // Generate a random 6-digit sync code (e.g., GOL-183920)
@@ -56,7 +138,7 @@ export async function saveUserData(
   maintenanceLogs: MaintenanceLog[]
 ): Promise<void> {
   const normalized = (vehicle.plate || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const dataToSave = {
+  const rawData = {
     userId,
     syncCode,
     vehicle,
@@ -66,28 +148,32 @@ export async function saveUserData(
     plateNormalized: normalized || null
   };
 
+  // Sanitize data recursively to purge any 'undefined' keys/values which crash Firestore writes
+  const dataToSave = sanitizeForFirestore(rawData);
+
+  const path = `users/${userId}`;
   try {
     // 1. Save to the active userId document
     const userDocRef = doc(db, 'users', userId);
     await setDoc(userDocRef, dataToSave, { merge: true });
 
-    // 2. If a plate is present, also save to a deterministic plate-based document
-    // so that even if the user clears all local storage, they can restore instantly by plate!
-    if (normalized) {
-      const plateDocRef = doc(db, 'users', `placa_${normalized}`);
+    // 2. If a plate is present, and it's a distinct document, also save to deterministic plate document
+    const plateDocId = `placa_${normalized}`;
+    if (normalized && userId !== plateDocId) {
+      const plateDocRef = doc(db, 'users', plateDocId);
       await setDoc(plateDocRef, {
         ...dataToSave,
-        userId: `placa_${normalized}` // ensure the deterministic ID is preserved when retrieved
+        userId: plateDocId // preserve plate doc id inside the record
       }, { merge: true });
     }
   } catch (error) {
-    console.error("Erro ao salvar dados do usuário no Firestore:", error);
-    throw error;
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 // Load user data by userId (Server-first, falling back to cache if offline)
 export async function loadUserData(userId: string): Promise<UserData | null> {
+  const path = `users/${userId}`;
   const userDocRef = doc(db, 'users', userId);
   try {
     // Force direct fetch from server to guarantee 100% cloud accuracy and bypass stale browser cache
@@ -105,7 +191,7 @@ export async function loadUserData(userId: string): Promise<UserData | null> {
     } catch (cacheError) {
       console.error("Erro ao carregar dados do cache local do Firestore:", cacheError);
     }
-    throw error;
+    handleFirestoreError(error, OperationType.GET, path);
   }
   return null;
 }
@@ -115,6 +201,7 @@ export async function findUserByPlate(plate: string): Promise<UserData | null> {
   const normalized = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!normalized) return null;
   
+  const path = `users/placa_${normalized}`;
   const plateDocRef = doc(db, 'users', `placa_${normalized}`);
   try {
     // Try deterministic document fetch from server first
@@ -145,18 +232,19 @@ export async function findUserByPlate(plate: string): Promise<UserData | null> {
         return querySnapshot.docs[0].data() as UserData;
       }
     } catch (cacheError) {
-      console.error("Erro ao buscar no cache local:", cacheError);
-      throw error;
+      handleFirestoreError(cacheError, OperationType.LIST, 'users');
     }
+    handleFirestoreError(error, OperationType.LIST, 'users');
   }
   return null;
 }
 
 // Search for user data by syncCode (Server-first)
 export async function findUserBySyncCode(syncCode: string): Promise<UserData | null> {
+  const cleanCode = syncCode.trim().toUpperCase();
   try {
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('syncCode', '==', syncCode.trim().toUpperCase()), limit(1));
+    const q = query(usersRef, where('syncCode', '==', cleanCode), limit(1));
     const querySnapshot = await getDocsFromServer(q);
     if (!querySnapshot.empty) {
       const userDoc = querySnapshot.docs[0];
@@ -167,15 +255,15 @@ export async function findUserBySyncCode(syncCode: string): Promise<UserData | n
     // Cache fallback
     try {
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('syncCode', '==', syncCode.trim().toUpperCase()), limit(1));
+      const q = query(usersRef, where('syncCode', '==', cleanCode), limit(1));
       const querySnapshot = await getDocs(q);
       if (!querySnapshot.empty) {
         return querySnapshot.docs[0].data() as UserData;
       }
     } catch (cacheError) {
-      console.error("Erro ao buscar código de sincronização no cache local:", cacheError);
-      throw error;
+      handleFirestoreError(cacheError, OperationType.LIST, 'users');
     }
+    handleFirestoreError(error, OperationType.LIST, 'users');
   }
   return null;
 }
