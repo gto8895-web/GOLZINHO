@@ -41,23 +41,38 @@ import {
 } from './firebase';
 
 export default function App() {
+  // Get sync code from URL query parameter if present
+  const getCodeFromUrl = () => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('f') || params.get('code') || params.get('fleet');
+    }
+    return null;
+  };
+
+  const updateUrlParameter = (code: string) => {
+    if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('f') !== code) {
+        url.searchParams.set('f', code);
+        window.history.replaceState({ path: url.toString() }, '', url.toString());
+      }
+    }
+  };
+
   // Cloud Sync state
   const [userId, setUserId] = useState<string>(() => {
-    let id = localStorage.getItem('golzinho_user_id') || '';
-    if (!id) {
-      id = generateUserId();
-      localStorage.setItem('golzinho_user_id', id);
-    }
-    return id;
+    const urlCode = getCodeFromUrl();
+    if (urlCode) return ''; // We don't know the userId yet; let initCloudData load it
+    return localStorage.getItem('golzinho_user_id') || '';
   });
 
   const [syncCode, setSyncCode] = useState<string>(() => {
-    let code = localStorage.getItem('golzinho_sync_code') || '';
-    if (!code) {
-      code = generateSyncCode();
-      localStorage.setItem('golzinho_sync_code', code);
+    const urlCode = getCodeFromUrl();
+    if (urlCode) {
+      return urlCode.trim().toUpperCase();
     }
-    return code;
+    return localStorage.getItem('golzinho_sync_code') || '';
   });
 
   const [cloudLoaded, setCloudLoaded] = useState(false);
@@ -170,16 +185,8 @@ export default function App() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<boolean>(false);
 
-  // 1. Initial Load of cloud data on mount / userId change
+  // 1. Initial Load of cloud data on mount
   useEffect(() => {
-    if (!userId) {
-      setCloudLoaded(false);
-      return;
-    }
-
-    // CRITICAL RACE-CONDITION GUARD: If cloudLoaded is already true (meaning registration
-    // or login flow has just set up the fresh/loaded states), skip executing initCloudData
-    // in the background to prevent stale cloud fetch from overwriting user modifications.
     if (cloudLoaded) {
       return;
     }
@@ -197,100 +204,123 @@ export default function App() {
           }
         }
 
-        const cloudData = await loadUserData(userId);
-        if (cloudData) {
-          // Compare local vs cloud timestamps to resolve sync conflicts beautifully
-          const cloudUpdatedAt = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
-          const localUpdatedAtStr = localStorage.getItem('car_tracker_updated_at');
-          const localUpdatedAt = localUpdatedAtStr ? new Date(localUpdatedAtStr).getTime() : 0;
+        const urlCode = getCodeFromUrl();
+        let cloudData = null;
 
-          if (localUpdatedAt > cloudUpdatedAt) {
-            console.log("Local changes are newer than cloud. Syncing local state to cloud.");
-            
-            let finalVehicles = vehicles;
-            let finalActiveId = activeVehicleId;
-            let finalFuelLogs = fuelLogs;
-            let finalMaintLogs = maintenanceLogs;
-
-            const savedVehs = localStorage.getItem('car_tracker_vehicles_v2');
-            const savedActiveId = localStorage.getItem('car_tracker_active_vehicle_id');
-            const savedFuel = localStorage.getItem('car_tracker_fuel_logs_v2');
-            const savedMaint = localStorage.getItem('car_tracker_maint_logs_v2');
-
-            if (savedVehs) {
-              try { finalVehicles = JSON.parse(savedVehs); } catch (e) {}
-            }
-            if (savedActiveId) {
-              finalActiveId = savedActiveId;
-            }
-            if (savedFuel) {
-              try { finalFuelLogs = JSON.parse(savedFuel); } catch (e) {}
-            }
-            if (savedMaint) {
-              try { finalMaintLogs = JSON.parse(savedMaint); } catch (e) {}
-            }
-
-            const primaryVehicle = finalVehicles.find(v => v.id === finalActiveId) || finalVehicles[0] || INITIAL_VEHICLE;
-
-            await saveUserData(userId, syncCode, primaryVehicle, finalFuelLogs, finalMaintLogs, finalVehicles, finalActiveId);
-            
-            setVehicles(finalVehicles);
-            setActiveVehicleId(finalActiveId);
-            setFuelLogs(finalFuelLogs);
-            setMaintenanceLogs(finalMaintLogs);
-
-            lastSavedRef.current = JSON.stringify({
-              vehicles: finalVehicles,
-              activeVehicleId: finalActiveId,
-              fuelLogs: finalFuelLogs,
-              maintenanceLogs: finalMaintLogs
-            });
-            setSyncStatus('connected');
-            setCloudLoaded(true);
+        // 1. Try fetching by URL syncCode first
+        if (urlCode) {
+          const cleanUrlCode = urlCode.trim().toUpperCase();
+          cloudData = await findUserBySyncCode(cleanUrlCode);
+          if (cloudData) {
+            console.log("Successfully loaded cloud data using URL code:", cleanUrlCode);
+            localStorage.setItem('golzinho_user_id', cloudData.userId);
+            localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
+            setUserId(cloudData.userId);
+            setSyncCode(cloudData.syncCode);
           } else {
-            console.log("Cloud data is newer or equal to local. Loading cloud state.");
-            const loadedVehs = cloudData.vehicles || (cloudData.vehicle ? [cloudData.vehicle] : [INITIAL_VEHICLE]);
-            const loadedActiveId = cloudData.activeVehicleId || loadedVehs[0]?.id || 'vehicle-1';
-            const loadedFuel = cloudData.fuelLogs || [];
-            const loadedMaint = cloudData.maintenanceLogs || [];
-
-            setVehicles(loadedVehs);
-            setActiveVehicleId(loadedActiveId);
-            setFuelLogs(loadedFuel);
-            setMaintenanceLogs(loadedMaint);
-            
-            lastSavedRef.current = JSON.stringify({
-              vehicles: loadedVehs,
-              activeVehicleId: loadedActiveId,
-              fuelLogs: loadedFuel,
-              maintenanceLogs: loadedMaint
-            });
-            
-            setSyncStatus('connected');
-            setCloudLoaded(true);
+            console.warn(`URL sync code ${cleanUrlCode} not found in cloud.`);
           }
-        } else {
-          // If no cloud data exists yet, seed the cloud database with initial data
-          await saveUserData(userId, syncCode, INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS, [INITIAL_VEHICLE], INITIAL_VEHICLE.id);
+        }
+
+        // 2. Fallback: If not loaded via URL code, but we have a userId in localStorage, load by that userId
+        const localUserId = localStorage.getItem('golzinho_user_id');
+        if (!cloudData && localUserId) {
+          cloudData = await loadUserData(localUserId);
+          if (cloudData) {
+            console.log("Successfully loaded cloud data using local userId:", localUserId);
+            setUserId(cloudData.userId);
+            setSyncCode(cloudData.syncCode);
+            localStorage.setItem('golzinho_user_id', cloudData.userId);
+            localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
+          }
+        }
+
+        // 3. Fallback: If still no cloudData (new user or both local & URL are empty/invalid)
+        if (!cloudData) {
+          // Check if we have cached local state to degrade gracefully if offline
+          const cachedVehs = localStorage.getItem('car_tracker_vehicles_v2');
+          if (cachedVehs && localUserId) {
+            console.warn("Utilizando cache local devido à falta de conexão.");
+            try {
+              const savedVehs = JSON.parse(cachedVehs);
+              const savedActiveId = localStorage.getItem('car_tracker_active_vehicle_id') || 'vehicle-1';
+              const savedFuel = JSON.parse(localStorage.getItem('car_tracker_fuel_logs_v2') || '[]');
+              const savedMaint = JSON.parse(localStorage.getItem('car_tracker_maint_logs_v2') || '[]');
+
+              setUserId(localUserId);
+              setSyncCode(localStorage.getItem('golzinho_sync_code') || '');
+              setVehicles(savedVehs);
+              setActiveVehicleId(savedActiveId);
+              setFuelLogs(savedFuel);
+              setMaintenanceLogs(savedMaint);
+              
+              setSyncStatus('offline');
+              setCloudLoaded(true);
+              return;
+            } catch (e) {
+              console.error("Erro ao fazer parse do cache local:", e);
+            }
+          }
+
+          // Generate totally new credentials
+          const newUserId = generateUserId();
+          const newSyncCode = generateSyncCode();
+
+          console.log("Creating brand new cloud fleet record:", newSyncCode);
+          localStorage.setItem('golzinho_user_id', newUserId);
+          localStorage.setItem('golzinho_sync_code', newSyncCode);
+          setUserId(newUserId);
+          setSyncCode(newSyncCode);
+
+          // Seed default template data to cloud
+          await saveUserData(newUserId, newSyncCode, INITIAL_VEHICLE, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS, [INITIAL_VEHICLE], INITIAL_VEHICLE.id);
+          
           setVehicles([INITIAL_VEHICLE]);
           setActiveVehicleId(INITIAL_VEHICLE.id);
           setFuelLogs(INITIAL_FUEL_LOGS);
           setMaintenanceLogs(INITIAL_MAINTENANCE_LOGS);
+
           lastSavedRef.current = JSON.stringify({
             vehicles: [INITIAL_VEHICLE],
             activeVehicleId: INITIAL_VEHICLE.id,
             fuelLogs: INITIAL_FUEL_LOGS,
             maintenanceLogs: INITIAL_MAINTENANCE_LOGS
           });
+
+          // Sync URL query string to contain the active fleet code
+          updateUrlParameter(newSyncCode);
           setSyncStatus('connected');
-          setCloudLoaded(true); // Only mark as loaded when cloud seed is completely successful
+          setCloudLoaded(true);
+          return;
         }
+
+        // 4. Load found cloudData into React states
+        const loadedVehs = cloudData.vehicles || (cloudData.vehicle ? [cloudData.vehicle] : [INITIAL_VEHICLE]);
+        const loadedActiveId = cloudData.activeVehicleId || loadedVehs[0]?.id || 'vehicle-1';
+        const loadedFuel = cloudData.fuelLogs || [];
+        const loadedMaint = cloudData.maintenanceLogs || [];
+
+        setVehicles(loadedVehs);
+        setActiveVehicleId(loadedActiveId);
+        setFuelLogs(loadedFuel);
+        setMaintenanceLogs(loadedMaint);
+
+        lastSavedRef.current = JSON.stringify({
+          vehicles: loadedVehs,
+          activeVehicleId: loadedActiveId,
+          fuelLogs: loadedFuel,
+          maintenanceLogs: loadedMaint
+        });
+
+        // Ensure URL query param is updated
+        updateUrlParameter(cloudData.syncCode);
+        setSyncStatus('connected');
+        setCloudLoaded(true);
+
       } catch (err) {
-        console.error("Erro ao inicializar dados com Firestore:", err);
-        // offline/cache safety: If we already have cached local data, let the user inside in offline mode
-        const cachedVehiclesExists = localStorage.getItem('car_tracker_vehicles_v2');
-        if (cachedVehiclesExists) {
-          console.warn("Utilizando cache local devido à indisponibilidade do servidor.");
+        console.error("Erro fatal ao inicializar dados da nuvem:", err);
+        const cachedVehs = localStorage.getItem('car_tracker_vehicles_v2');
+        if (cachedVehs) {
           setSyncStatus('offline');
           setCloudLoaded(true);
         } else {
@@ -298,8 +328,9 @@ export default function App() {
         }
       }
     }
+
     initCloudData();
-  }, [userId]);
+  }, [cloudLoaded]);
 
   // 2. Auto-save local updates to the cloud (with quick 500ms debounce)
   useEffect(() => {
@@ -485,6 +516,10 @@ export default function App() {
       setActiveVehicleId(INITIAL_VEHICLE.id);
       setFuelLogs([]);
       setMaintenanceLogs([]);
+
+      // Update URL parameters to the new fleet code
+      updateUrlParameter(newCode);
+
       setCloudLoaded(false);
     }
   };
@@ -534,6 +569,9 @@ export default function App() {
         localStorage.setItem('car_tracker_vehicles_v2', JSON.stringify(loadedVehicles));
         localStorage.setItem('car_tracker_active_vehicle_id', loadedActiveId);
         
+        // Update URL parameters
+        updateUrlParameter(cloudData.syncCode);
+
         setSyncSuccess(true);
         setInputSyncCode('');
         setSyncStatus('connected');
@@ -624,7 +662,7 @@ export default function App() {
     return kmMatches || dateMatches;
   });
 
-  if (userId && !cloudLoaded) {
+  if (!cloudLoaded) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col justify-center items-center p-4 relative overflow-hidden" id="sync-loading-root">
         {/* Background glow effects */}
