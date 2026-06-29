@@ -48,6 +48,8 @@ export interface UserData {
   userId: string;
   syncCode: string;
   vehicle: Vehicle;
+  vehicles?: Vehicle[];
+  activeVehicleId?: string;
   fuelLogs: FuelLog[];
   maintenanceLogs: MaintenanceLog[];
   updatedAt: string;
@@ -135,13 +137,17 @@ export async function saveUserData(
   syncCode: string, 
   vehicle: Vehicle, 
   fuelLogs: FuelLog[], 
-  maintenanceLogs: MaintenanceLog[]
+  maintenanceLogs: MaintenanceLog[],
+  vehicles?: Vehicle[],
+  activeVehicleId?: string
 ): Promise<void> {
   const normalized = (vehicle.plate || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const rawData = {
     userId,
     syncCode,
     vehicle,
+    vehicles: vehicles || [vehicle],
+    activeVehicleId: activeVehicleId || vehicle.id || 'vehicle-1',
     fuelLogs,
     maintenanceLogs,
     updatedAt: new Date().toISOString(),
