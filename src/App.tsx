@@ -43,15 +43,21 @@ import {
 export default function App() {
   // Cloud Sync state
   const [userId, setUserId] = useState<string>(() => {
-    return localStorage.getItem('golzinho_user_id') || '';
+    let id = localStorage.getItem('golzinho_user_id') || '';
+    if (!id) {
+      id = generateUserId();
+      localStorage.setItem('golzinho_user_id', id);
+    }
+    return id;
   });
 
   const [syncCode, setSyncCode] = useState<string>(() => {
-    return localStorage.getItem('golzinho_sync_code') || '';
-  });
-
-  const [isIdentified, setIsIdentified] = useState<boolean>(() => {
-    return !!localStorage.getItem('golzinho_user_id');
+    let code = localStorage.getItem('golzinho_sync_code') || '';
+    if (!code) {
+      code = generateSyncCode();
+      localStorage.setItem('golzinho_sync_code', code);
+    }
+    return code;
   });
 
   const [cloudLoaded, setCloudLoaded] = useState(false);
@@ -63,21 +69,6 @@ export default function App() {
   const [inputSyncCode, setInputSyncCode] = useState('');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState(false);
-
-  // Identity Portal State
-  const [portalTab, setPortalTab] = useState<'login' | 'register'>('login');
-  const [portalPlate, setPortalPlate] = useState('');
-  const [portalSyncCode, setPortalSyncCode] = useState('');
-  
-  // Registration fields
-  const [regPlate, setRegPlate] = useState('');
-  const [regBrand, setRegBrand] = useState('Volkswagen');
-  const [regName, setRegName] = useState('Gol G4');
-  const [regYear, setRegYear] = useState('2008');
-  const [regOdometer, setRegOdometer] = useState('120000');
-  
-  const [portalLoading, setPortalLoading] = useState(false);
-  const [portalError, setPortalError] = useState<string | null>(null);
 
   // Ref to track the last saved state to prevent redundant writes or initial overwrites
   const lastSavedRef = useRef<string>('');
@@ -172,9 +163,6 @@ export default function App() {
   const [addVehYear, setAddVehYear] = useState('');
   const [addVehOdometer, setAddVehOdometer] = useState('');
   const [addVehError, setAddVehError] = useState<string | null>(null);
-
-  // Toggle for legacy plate login in simplified portal
-  const [showPlateLogin, setShowPlateLogin] = useState(false);
 
   const [isFuelModalOpen, setIsFuelModalOpen] = useState(false);
   const [isMaintModalOpen, setIsMaintModalOpen] = useState(false);
@@ -476,159 +464,28 @@ export default function App() {
     }
   };
 
-  // Handle portal login (simplified primary code access, with backup plate search)
-  const handlePortalLogin = async (e: FormEvent) => {
-    e.preventDefault();
-    setPortalError(null);
-    const searchCode = portalSyncCode.trim().toUpperCase();
-    const searchPlate = portalPlate.trim().toUpperCase();
-    
-    if (!searchCode && !searchPlate) {
-      setPortalError('Por favor, informe o seu Código de Acesso.');
-      return;
-    }
-
-    setPortalLoading(true);
-    try {
-      let cloudData = null;
-      if (searchCode) {
-        cloudData = await findUserBySyncCode(searchCode);
-      } else if (searchPlate) {
-        cloudData = await findUserByPlate(searchPlate);
-      }
-
-      if (cloudData) {
-        // Load the fleet vehicles, fallback gracefully to single vehicle representation for backward compatibility
-        const loadedVehicles = cloudData.vehicles || (cloudData.vehicle ? [cloudData.vehicle] : [INITIAL_VEHICLE]);
-        const loadedActiveId = cloudData.activeVehicleId || loadedVehicles[0]?.id || 'vehicle-1';
-
-        setUserId(cloudData.userId);
-        setSyncCode(cloudData.syncCode);
-        setVehicles(loadedVehicles);
-        setActiveVehicleId(loadedActiveId);
-        setFuelLogs(cloudData.fuelLogs || []);
-        setMaintenanceLogs(cloudData.maintenanceLogs || []);
-        
-        lastSavedRef.current = JSON.stringify({
-          vehicles: loadedVehicles,
-          activeVehicleId: loadedActiveId,
-          fuelLogs: cloudData.fuelLogs || [],
-          maintenanceLogs: cloudData.maintenanceLogs || []
-        });
-        setCloudLoaded(true);
-
-        localStorage.setItem('golzinho_user_id', cloudData.userId);
-        localStorage.setItem('golzinho_sync_code', cloudData.syncCode);
-        localStorage.setItem('car_tracker_vehicles_v2', JSON.stringify(loadedVehicles));
-        localStorage.setItem('car_tracker_active_vehicle_id', loadedActiveId);
-        
-        setIsIdentified(true);
-        setSyncSuccess(true);
-        setTimeout(() => setSyncSuccess(false), 4000);
-      } else {
-        if (searchCode) {
-          setPortalError('Código de acesso inválido ou inexistente.');
-        } else {
-          setPortalError(`Nenhuma frota encontrada com veículo de placa ${searchPlate}.`);
-        }
-      }
-    } catch (err) {
-      console.error("Erro ao autenticar no portal:", err);
-      setPortalError('Ocorreu uma falha de conexão com a nuvem. Tente novamente.');
-    } finally {
-      setPortalLoading(false);
-    }
-  };
-
-  // Handle portal vehicle registration (streamlined initial fleet creation)
-  const handlePortalRegister = async (e: FormEvent) => {
-    e.preventDefault();
-    setPortalError(null);
-
-    const plateVal = regPlate.trim().toUpperCase();
-    const brandVal = regBrand.trim() || 'Volkswagen';
-    const nameVal = regName.trim() || 'Gol G4';
-    const yearVal = regYear.trim() || '2008';
-    const odomVal = parseInt(regOdometer.trim()) || 120000;
-
-    setPortalLoading(true);
-    try {
-      // If plate is provided, check for duplication
-      if (plateVal) {
-        const normalizedPlate = plateVal.replace(/[^A-Z0-9]/g, '');
-        if (normalizedPlate.length >= 3) {
-          const existing = await findUserByPlate(normalizedPlate);
-          if (existing) {
-            setPortalError(`A placa ${plateVal} já está cadastrada em uma frota! Use a aba de acesso.`);
-            setPortalLoading(false);
-            return;
-          }
-        }
-      }
-
-      const generatedId = `fleet_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      const generatedCode = generateSyncCode();
-      const firstVehicle: Vehicle = {
-        id: `vehicle-${Date.now()}`,
-        name: nameVal,
-        brand: brandVal,
-        plate: plateVal || 'GOL-2026',
-        year: yearVal || undefined,
-        currentOdometer: odomVal,
-      };
-
-      // Save initial seeded state to cloud (seeds with initial templates so user has records to see)
-      await saveUserData(generatedId, generatedCode, firstVehicle, INITIAL_FUEL_LOGS, INITIAL_MAINTENANCE_LOGS, [firstVehicle], firstVehicle.id);
-
-      setUserId(generatedId);
-      setSyncCode(generatedCode);
-      setVehicles([firstVehicle]);
-      setActiveVehicleId(firstVehicle.id);
-      setFuelLogs(INITIAL_FUEL_LOGS);
-      setMaintenanceLogs(INITIAL_MAINTENANCE_LOGS);
-      lastSavedRef.current = JSON.stringify({
-        vehicles: [firstVehicle],
-        activeVehicleId: firstVehicle.id,
-        fuelLogs: INITIAL_FUEL_LOGS,
-        maintenanceLogs: INITIAL_MAINTENANCE_LOGS
-      });
-      setCloudLoaded(true);
-
-      localStorage.setItem('golzinho_user_id', generatedId);
-      localStorage.setItem('golzinho_sync_code', generatedCode);
-      localStorage.setItem('car_tracker_vehicles_v2', JSON.stringify([firstVehicle]));
-      localStorage.setItem('car_tracker_active_vehicle_id', firstVehicle.id);
-      
-      setIsIdentified(true);
-      setSyncSuccess(true);
-      setTimeout(() => setSyncSuccess(false), 4000);
-    } catch (err) {
-      console.error("Erro ao registrar frota:", err);
-      setPortalError('Erro ao salvar veículo na nuvem. Verifique sua conexão.');
-    } finally {
-      setPortalLoading(false);
-    }
-  };
-
-  // Disconnect active session
+  // Disconnect active session / reset to a new fresh fleet
   const handleLogout = () => {
-    if (confirm('Deseja desconectar? Seus dados continuam 100% seguros na nuvem e você poderá entrar novamente a qualquer momento digitando seu código de acesso.')) {
-      localStorage.removeItem('golzinho_user_id');
-      localStorage.removeItem('golzinho_sync_code');
+    if (confirm('Deseja criar uma nova frota do zero? Seus dados atuais continuarão salvos na nuvem sob o seu código de sincronização atual, mas este navegador iniciará um novo painel limpo.')) {
       localStorage.removeItem('car_tracker_vehicle_v2');
       localStorage.removeItem('car_tracker_vehicles_v2');
       localStorage.removeItem('car_tracker_active_vehicle_id');
       localStorage.removeItem('car_tracker_fuel_logs_v2');
       localStorage.removeItem('car_tracker_maint_logs_v2');
       
-      setUserId('');
-      setSyncCode('');
+      const newId = generateUserId();
+      const newCode = generateSyncCode();
+      
+      localStorage.setItem('golzinho_user_id', newId);
+      localStorage.setItem('golzinho_sync_code', newCode);
+      
+      setUserId(newId);
+      setSyncCode(newCode);
       setVehicles([INITIAL_VEHICLE]);
       setActiveVehicleId(INITIAL_VEHICLE.id);
       setFuelLogs([]);
       setMaintenanceLogs([]);
       setCloudLoaded(false);
-      setIsIdentified(false);
     }
   };
 
@@ -803,212 +660,6 @@ export default function App() {
               </div>
             </>
           )}
-        </div>
-      </div>
-    );
-  }
-
-  if (!isIdentified) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col justify-center items-center p-4 relative overflow-hidden" id="identity-portal-root">
-        {/* Background glow effects */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="absolute bottom-1/4 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none" />
-
-        <div className="w-full max-w-md bg-slate-900 border border-slate-850 rounded-2xl shadow-2xl p-6 sm:p-8 relative z-10">
-          
-          {/* Logo Header */}
-          <div className="flex flex-col items-center text-center mb-8">
-            <div className="p-4 bg-emerald-600 text-white rounded-2xl shadow-lg shadow-emerald-900/30 mb-4">
-              <Car className="w-8 h-8" />
-            </div>
-            <h1 className="text-2xl font-extrabold text-white tracking-widest uppercase">
-              GOLZINHO <span className="text-emerald-500 font-black">FROTA</span>
-            </h1>
-            <p className="text-xs text-slate-400 mt-1 uppercase tracking-wider font-semibold">Gerenciador Multiveículos Integrado</p>
-            <p className="text-[11px] text-slate-500 mt-2 max-w-sm">
-              Monitore despesas de combustível, custos de manutenção, consumo médio (km/L) e cronogramas de revisão para toda a sua frota em uma única conta.
-            </p>
-          </div>
-
-          {/* Tab Selector */}
-          <div className="flex border-b border-slate-800 mb-6">
-            <button
-              onClick={() => { setPortalTab('login'); setPortalError(null); }}
-              className={`flex-1 pb-3 text-xs font-bold border-b-2 transition uppercase tracking-wider cursor-pointer ${
-                portalTab === 'login' 
-                  ? 'border-emerald-500 text-emerald-500 font-extrabold' 
-                  : 'border-transparent text-slate-400 hover:text-slate-350'
-              }`}
-            >
-              Entrar na Frota
-            </button>
-            <button
-              onClick={() => { setPortalTab('register'); setPortalError(null); }}
-              className={`flex-1 pb-3 text-xs font-bold border-b-2 transition uppercase tracking-wider cursor-pointer ${
-                portalTab === 'register' 
-                  ? 'border-emerald-500 text-emerald-500 font-extrabold' 
-                  : 'border-transparent text-slate-400 hover:text-slate-350'
-              }`}
-            >
-              Criar Nova Frota
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          {portalTab === 'login' ? (
-            <form onSubmit={handlePortalLogin} className="space-y-4">
-              <div>
-                <label className="block text-[10px] text-slate-400 font-bold mb-1.5 uppercase tracking-wider">Código de Acesso Sincronizado</label>
-                <input
-                  type="text"
-                  placeholder="Ex: GOL-123456"
-                  value={portalSyncCode}
-                  onChange={(e) => setPortalSyncCode(e.target.value.toUpperCase())}
-                  className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono tracking-widest text-center text-sm"
-                  disabled={portalLoading}
-                />
-                <p className="text-[9.5px] text-slate-500 mt-1.5 leading-relaxed">
-                  Digite o código de 6 caracteres que foi gerado ao criar o seu painel de frota para sincronizar.
-                </p>
-              </div>
-
-              {showPlateLogin && (
-                <div className="pt-2 border-t border-slate-800/60 animate-in fade-in duration-200">
-                  <label className="block text-[10px] text-slate-400 font-bold mb-1.5 uppercase tracking-wider">Acessar pela Placa (Alternativo)</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: ABC-1234 ou GOL-2026"
-                    value={portalPlate}
-                    onChange={(e) => setPortalPlate(e.target.value.toUpperCase())}
-                    className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono tracking-widest text-center text-sm"
-                    disabled={portalLoading}
-                  />
-                </div>
-              )}
-
-              <div className="text-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowPlateLogin(!showPlateLogin)}
-                  className="text-[9.5px] text-slate-500 hover:text-slate-350 hover:underline transition cursor-pointer"
-                >
-                  {showPlateLogin ? 'Ocultar campo de Placa' : 'Deseja pesquisar e acessar usando a Placa de um veículo?'}
-                </button>
-              </div>
-
-              {portalError && (
-                <div className="p-3 bg-rose-950/40 border border-rose-900/50 rounded-xl text-rose-400 text-xs text-center font-medium leading-relaxed">
-                  {portalError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={portalLoading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/20 text-xs uppercase tracking-wider"
-              >
-                {portalLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Carregando Frota...
-                  </>
-                ) : (
-                  <>
-                    <Key className="w-4 h-4" /> Entrar no Gerenciador de Frota
-                  </>
-                )}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handlePortalRegister} className="space-y-4">
-              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-850 text-slate-400 text-xs text-center">
-                🚀 <strong className="text-white">Fácil e Sem Burocracia:</strong> Não é necessário digitar dados extensos. Clique no botão abaixo para criar seu espaço sincronizado de forma instantânea.
-              </div>
-
-              <div className="border-t border-slate-800/60 my-4 pt-3 space-y-3">
-                <p className="text-[10px] text-slate-500 uppercase tracking-widest font-extrabold">Configurar Primeiro Veículo (Opcional)</p>
-                
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[9px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Modelo</label>
-                    <input
-                      type="text"
-                      value={regName}
-                      onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Ex: Gol G4"
-                      className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs"
-                      disabled={portalLoading}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Placa</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: GOL-2026"
-                      value={regPlate}
-                      onChange={(e) => setRegPlate(e.target.value.toUpperCase())}
-                      className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 font-mono text-xs uppercase"
-                      disabled={portalLoading}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[9px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Marca</label>
-                    <input
-                      type="text"
-                      value={regBrand}
-                      onChange={(e) => setRegBrand(e.target.value)}
-                      placeholder="Ex: Volkswagen"
-                      className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs"
-                      disabled={portalLoading}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Odômetro Inicial</label>
-                    <input
-                      type="number"
-                      value={regOdometer}
-                      onChange={(e) => setRegOdometer(e.target.value)}
-                      placeholder="Ex: 120000"
-                      className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl w-full text-slate-200 text-xs font-mono"
-                      disabled={portalLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {portalError && (
-                <div className="p-3 bg-rose-950/40 border border-rose-900/50 rounded-xl text-rose-400 text-xs text-center font-medium leading-relaxed">
-                  {portalError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={portalLoading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/20 text-xs uppercase tracking-wider"
-              >
-                {portalLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Criando Frota na Nuvem...
-                  </>
-                ) : (
-                  <>
-                    <Cloud className="w-4 h-4" /> Criar Frota & Acessar Instantaneamente
-                  </>
-                )}
-              </button>
-            </form>
-          )}
-
-          {/* Safe cloud storage disclaimer */}
-          <div className="mt-6 pt-4 border-t border-slate-800/60 flex items-center gap-2 text-[10px] text-slate-500 justify-center">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-            <span>Conexão segura com Firebase Firestore ativa</span>
-          </div>
-
         </div>
       </div>
     );
